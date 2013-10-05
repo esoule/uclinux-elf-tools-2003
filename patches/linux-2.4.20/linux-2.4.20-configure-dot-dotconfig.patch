@@ -1,0 +1,46 @@
+--- a/scripts/Configure	2001-07-02 16:56:40.000000000 -0400
++++ b/scripts/Configure	2013-09-29 10:50:57.000000000 -0400
+@@ -544,9 +544,9 @@
+ 	CONFIG_IN=$1
+ fi
+ 
+-DEFAULTS=arch/$ARCH/defconfig
+-if [ -f .config ]; then
+-  DEFAULTS=.config
++DEFAULTS=./arch/$ARCH/defconfig
++if [ -f ./.config ]; then
++  DEFAULTS=./.config
+ fi
+ 
+ if [ -f $DEFAULTS ]; then
+@@ -554,9 +554,9 @@
+   echo "# Using defaults found in" $DEFAULTS
+   echo "#"
+   . $DEFAULTS
+-  sed -e 's/# \(CONFIG_[^ ]*\) is not.*/\1=n/' <$DEFAULTS >.config-is-not.$$
+-  . .config-is-not.$$
+-  rm .config-is-not.$$
++  sed -e 's/# \(CONFIG_[^ ]*\) is not.*/\1=n/' <$DEFAULTS >./.config-is-not.$$
++  . ./.config-is-not.$$
++  rm ./.config-is-not.$$
+ else
+   echo "#"
+   echo "# No defaults found"
+@@ -565,12 +565,12 @@
+ 
+ . $CONFIG_IN
+ 
+-rm -f .config.old
+-if [ -f .config ]; then
+-	mv .config .config.old
++rm -f ./.config.old
++if [ -f ./.config ]; then
++	mv ./.config ./.config.old
+ fi
+-mv .tmpconfig .config
+-mv .tmpconfig.h include/linux/autoconf.h
++mv ./.tmpconfig ./.config
++mv ./.tmpconfig.h ./include/linux/autoconf.h
+ 
+ echo
+ echo "*** End of Linux kernel configuration."

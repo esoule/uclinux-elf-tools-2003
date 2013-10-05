@@ -7,8 +7,7 @@
 # Before running you will need to obtain (if you don't have them in this
 # directory):
 #
-#    binutils-2.10.tar.bz2         in current directory (or a gzipped version)
-#    binutils-2.10-full.patch      in current directory
+#    binutils-2.14.tar.bz2         in current directory (or a gzipped version)
 #    gcc-2.95.3.tar.bz2            in current directory (or a gzipped version)
 #    gcc-2.95.3-full.patch         in current directory
 #    gcc-2.95.3-arm-pic.patch      in current directory
@@ -16,6 +15,7 @@
 #    gcc-2.95.3-arm-mlib.patch     in current directory
 #    gcc-2.95.3-sigset.patch       in current directory
 #    gcc-2.95.3-m68k-zext.patch    in current directory
+#    gcc-makeinfo-strcpy-overlap.patch  in current directory
 #    genromfs-0.5.1.tar.gz         in current directory, romfs.sourceforge.net
 #    STLport-4.5.3.tar.gz          in current directory
 #    STLport-4.5.3.patch           in current directory
@@ -41,9 +41,6 @@
 #
 # To build everything run "./uclinux-elf-tools-builder.sh build 2>&1 | tee errs"
 #
-# WARNING: it removes all current tools from ${PREFIX},  so back them up
-#          first :-)
-#
 # Copyright (C) 2001-2003 David McCullough <davidm@snapgear.com>
 #
 # Cygwin changes from Heiko Degenhardt <linux@sentec-elektronik.de>
@@ -59,8 +56,45 @@
 # our build starts here
 #
 
+set -x	# debug script
+
 BASEDIR="`pwd`"
 
+SCRIPT_NAME=uclinux-elf-tools-builder.sh
+
+abort() {
+    echo ${SCRIPT_NAME}: $@
+    exec false
+}
+
+test -z "${PREFIX}"           && abort "Please set PREFIX to where you want the toolchain installed."
+test -z "${BUILD_DIR}"        && abort "Please set BUILD_DIR to the directory where the tools are to be built"
+test -z "${SRC_DIR}"          && abort "Please set SRC_DIR to the directory where the source tarballs are to be unpacked"
+test -z "${TARBALLS_DIR}"     && abort "Please set TARBALLS_DIR to the directory where the source tarballs are stored"
+
+test -z "${BINUTILS_DIR}"     && abort "Please set BINUTILS_DIR to the bare filename of the binutils tarball or directory"
+test -z "${GCC_DIR}"          && abort "Please set GCC_DIR to the bare filename of the gcc tarball or directory"
+test -z "${UCLIBC_DIR}"       && abort "Please set UCLIBC_DIR to the bare filename of the uClibc tarball or directory"
+
+test -z "${TARGET}"           && abort "Please set TARGET to the Gnu target identifier (e.g. pentium-linux)"
+test -z "${TARGET_CFLAGS}"    && abort "Please set TARGET_CFLAGS to any compiler flags needed when building glibc (-O recommended)"
+test -z "${LINUX_DIR}"        && abort "Please set LINUX_DIR to the bare filename of the tarball or directory containing the kernel headers"
+
+test -z "${ELF2FLT_DIR}"       && abort "Please set ELF2FLT_DIR to the bare filename of the elf2flt tarball or directory"
+test -z "${STLPORT_DIR}"       && abort "Please set STLPORT_DIR to the bare filename of the STLport tarball or directory"
+
+test -z "${KERNELCONFIG}"      && abort "Please set KERNELCONFIG to the path to kernel configuration file"
+test -z "${UCLIBCCONFIG}"      && abort "Please set UCLIBCCONFIG to the path to uClibc configuration file"
+
+test -r "${KERNELCONFIG}"  || abort  "Can't read file KERNELCONFIG = $KERNELCONFIG, please fix."
+test -r "${UCLIBCCONFIG}"  || abort  "Can't read file UCLIBCCONFIG = $UCLIBCCONFIG, please fix."
+
+test -d "${PREFIX}"        || abort "PREFIX = $PREFIX must be a directory"
+test -w "${PREFIX}"        || abort "PREFIX = $PREFIX must be writable"
+PREFIX_FILECOUNT=`ls -A ${PREFIX} | wc -l`
+test "${PREFIX_FILECOUNT}" -eq '0' || abort "PREFIX = $PREFIX must be empty"
+
+TOP_DIR=${TOP_DIR-`pwd`}
 #############################################################
 #
 # EDIT these to suit your system and source locations
@@ -68,17 +102,15 @@ BASEDIR="`pwd`"
 
 MAKE=make
 PATCH=patch
-ELF2FLT="$BASEDIR/elf2flt"
-UCLIBC="$BASEDIR/uClibc"
-KERNEL="$BASEDIR/linux-2.4.x"
+##ELF2FLT="$BASEDIR/${ELF2FLT_DIR}"
+##UCLIBC="$BASEDIR/${UCLIBC_DIR}"
+##KERNEL="$BASEDIR/${LINUX_DIR}"
 # KERNEL="$BASEDIR/uClinux-2.0.x"
 
 # TARGET=m68k-elf
-TARGET=arm-elf
+# TARGET=arm-elf
 
 # set your install directory here and add the correct PATH
-# PREFIX=/tmp/tools
-# PATH="${PREFIX}/bin:$PATH"; export PATH
 
 # uncomment the following line to build for Cygwin
 # you may also need to include your PATCH path specifically
@@ -90,7 +122,19 @@ TARGET=arm-elf
 # Don't edit these
 #
 
+PATH="${PREFIX}/bin:$PATH"; export PATH
+LANG=C
+
 sysinclude=include
+
+UMASK_PREV=`umask`
+if [ ${UMASK_PREV} != '0022' ] ; then
+  umask 0022
+fi
+
+if [ -z "${HOSTCC_COMMAND}" ] ; then
+  HOSTCC_COMMAND=gcc
+fi
 
 #############################################################
 #
@@ -100,7 +144,23 @@ sysinclude=include
 mark()
 {
 	echo "STAGE $1 - complete"
-	touch "$BASEDIR/STAGE$1"
+	touch "${BUILD_DIR}/STAGE$1-m.txt"
+
+	if [ -d ${PREFIX} ] ; then
+          local letter=b
+	  find ${PREFIX} -type f >> ${BUILD_DIR}/STAGE$1-tmp-files.txt
+	  find ${PREFIX} -type l >> ${BUILD_DIR}/STAGE$1-tmp-links.txt
+	  > ${BUILD_DIR}/STAGE$1-${letter}-prefix.txt
+	  cat ${BUILD_DIR}/STAGE$1-tmp-files.txt | LANG=C sort \
+	    | sed "s,${PREFIX},PREFIX," >> ${BUILD_DIR}/STAGE$1-${letter}-prefix.txt
+	  cat ${BUILD_DIR}/STAGE$1-tmp-links.txt | LANG=C sort \
+	    | sed "s,${PREFIX},PREFIX," >> ${BUILD_DIR}/STAGE$1-${letter}-prefix.txt
+	  cat ${BUILD_DIR}/STAGE$1-tmp-files.txt | LANG=C sort \
+	    | xargs --no-run-if-empty -n 1 md5sum -b  \
+	    | sed "s,${PREFIX},PREFIX," >> ${BUILD_DIR}/STAGE$1-${letter}-md5sums.txt
+	  rm -f ${BUILD_DIR}/STAGE$1-tmp-files.txt
+	  rm -f ${BUILD_DIR}/STAGE$1-tmp-links.txt
+	fi
 }
 
 #
@@ -110,8 +170,25 @@ mark()
 schk()
 {
 	echo "--------------------------------------------------------"
-	[ -f "$BASEDIR/STAGE$1" ] && echo "STAGE $1 - already built" && return 1
+	[ -f "${BUILD_DIR}/STAGE$1-m.txt" ] && echo "STAGE $1 - already built" && return 1
 	echo "STAGE $1 - needs building"
+
+	if [ -d ${PREFIX} ] ; then
+          local letter=a
+	  find ${PREFIX} -type f >> ${BUILD_DIR}/STAGE$1-tmp-files.txt
+	  find ${PREFIX} -type l >> ${BUILD_DIR}/STAGE$1-tmp-links.txt
+	  > ${BUILD_DIR}/STAGE$1-${letter}-prefix.txt
+	  cat ${BUILD_DIR}/STAGE$1-tmp-files.txt | LANG=C sort \
+	    | sed "s,${PREFIX},PREFIX," >> ${BUILD_DIR}/STAGE$1-${letter}-prefix.txt
+	  cat ${BUILD_DIR}/STAGE$1-tmp-links.txt | LANG=C sort \
+	    | sed "s,${PREFIX},PREFIX," >> ${BUILD_DIR}/STAGE$1-${letter}-prefix.txt
+	  cat ${BUILD_DIR}/STAGE$1-tmp-files.txt | LANG=C sort \
+	    | xargs --no-run-if-empty -n 1 md5sum -b  \
+	    | sed "s,${PREFIX},PREFIX," >> ${BUILD_DIR}/STAGE$1-${letter}-md5sums.txt
+	  rm -f ${BUILD_DIR}/STAGE$1-tmp-files.txt
+	  rm -f ${BUILD_DIR}/STAGE$1-tmp-links.txt
+	fi
+
 	return 0
 }
 
@@ -119,31 +196,69 @@ schk()
 # extract most XYZ format files
 #
 
-extract()
+function extract_tarball()
 {
-	for i in "$@"; do
-		case "$i" in
-		*.tar.gz|*.tgz)   tar xzf "$i" ;;
-		*.tar.bz2|*.tbz2) bunzip2 < "$i" | tar xf - ;;
-		*.tar)            tar xf  "$i" ;;
-		*)
-			echo "Unknown file format $i" >&2
-			return 1
-			;;
-		esac
-	done
-	return 0
+   local tarballs_dir=${TARBALLS_DIR}
+   local src_dir=${1}
+   local basename=${2}
+   local orig_dir=`pwd`
+   local tar_done=0
+   if [ -n "${basename}" ] ; then
+       ( cd ${src_dir} && rm -rf ${basename} )
+   fi
+   for fff in ${tarballs_dir}/${basename}.tar* ; do
+      if [ -f ${fff} -a -r ${fff} ] ; then
+         (
+            cd ${src_dir} && tar -xf ${fff}
+         )
+         tar_done=1
+         break
+      fi
+   done
+   test ${tar_done} -eq 1 || abort "No tarfile to extract, ${tarballs_dir}, ${src_dir}, ${basename}  "
+   cd ${orig_dir}
 }
 
-#
-# work like cp -L -r on systems without it
-#
-
-cp_Lr()
+function patch_sources()
 {
-	cd "$1/."
-	[ -d "$2" ] || mkdir -p $2
-	find . | cpio -pLvdum "$2/."
+   local src_dir=${1}
+   local basename=${2}
+   # Pattern in a patch log to indicate failure
+   local patchfailmsgs="^No file to patch.  Skipping patch.|^Hunk .* FAILED at"
+   local orig_dir=`pwd`
+   if [ -d ${TOP_DIR}/patches/${basename} ] ; then
+      cd ${src_dir}/${basename}
+      for ppp in ${TOP_DIR}/patches/${basename}/*.patch ${TOP_DIR}/patches/${basename}/*.diff ; do
+         if test -f ${ppp} ; then
+            patch -g0 --fuzz=1 -p1 -f --input=${ppp} > patch$$.log 2>&1 || { cat patch$$.log ; abort "${SCRIPT_NAME}: patch $p failed" ; }
+            cat patch$$.log
+            egrep -q "${patchfailmsgs}" patch$$.log && abort "${SCRIPT_NAME}: patch $p failed"
+            rm -f patch$$.log
+         fi
+      done
+   fi
+   cd ${orig_dir}
+}
+
+function patch_kernel_uclinux()
+{
+   local tarballs_dir=${TARBALLS_DIR}
+   local src_dir=${1}
+   local kernel_basename=${2}
+   local ucpatch_basename=${3}
+   local orig_dir=`pwd`
+   # Pattern in a patch log to indicate failure
+   local patchfailmsgs="^No file to patch.  Skipping patch.|^Hunk .* FAILED at"
+   for ppp in ${ucpatch_basename}.patch.gz ${ucpatch_basename}.diff.gz ] ; do
+      if [ -f ${tarballs_dir}/${ppp} ] ; then
+	  cd ${src_dir}/${kernel_basename}
+	  zcat ${tarballs_dir}/${ppp} | patch -g0 --fuzz=1 -p1 -f > patch$$.log 2>&1 || { cat patch$$.log ; abort "${SCRIPT_NAME}: patch $p failed" ; }
+	  cat patch$$.log
+	  egrep -q "${patchfailmsgs}" patch$$.log && abort "${SCRIPT_NAME}: patch $p failed"
+	  rm -f patch$$.log
+      fi
+   done
+   cd ${orig_dir}
 }
 
 #############################################################
@@ -153,41 +268,44 @@ cp_Lr()
 
 stage1()
 {
-	schk 1 || return 0
 
-	rm -rf binutils-2.10
-	rm -rf gcc-2.95.3
-	rm -rf STLport-4.5.3
-	rm -rf ${PREFIX}/${TARGET}
-	rm -rf ${PREFIX}/lib/gcc-lib/${TARGET}
-	rm -rf ${PREFIX}/bin/${TARGET}*
-	rm -rf ${PREFIX}/man/*/${TARGET}-*
-#
-#	extract binutils, gcc and anything else we know about
-#
-	extract binutils-2.10.*
-	extract gcc-2.95.3.*
-	extract STLport-4.5.3.tar.gz
-#
-#	apply any patches
-#
-	${PATCH} -p0 < gcc-2.95.3-full.patch
-    ${PATCH} -p0 < gcc-2.95.3-arm-pic.patch
-    ${PATCH} -p0 < gcc-2.95.3-arm-pic.patch2
-    ${PATCH} -p0 < gcc-2.95.3-arm-mlib.patch
-    ${PATCH} -p0 < gcc-2.95.3-sigset.patch
-	${PATCH} -p0 < gcc-2.95.3-m68k-zext.patch
-	${PATCH} -p0 < binutils-2.10-full.patch
-    if [ "${CYGWIN}" ]; then
-        ${PATCH} -p0 < gcc-2.95.3-cygwin-020611.patch
-    fi
-	${PATCH} -p0 < STLport-4.5.3.patch
+ 	schk 1 || return 0
+# 
+# 	rm -rf binutils-2.14
+# 	rm -rf gcc-2.95.3
+# 	rm -rf STLport-4.5.3
+# 	rm -rf ${PREFIX}/${TARGET}
+# 	rm -rf ${PREFIX}/lib/gcc-lib/${TARGET}
+# 	rm -rf ${PREFIX}/bin/${TARGET}*
+# 	rm -rf ${PREFIX}/man/*/${TARGET}-*
+# #
+# #	extract binutils, gcc and anything else we know about
+# #
+# 	extract binutils-2.14.*
+# 	extract gcc-2.95.3.*
+# 	extract STLport-4.5.3.tar.gz
+# #
+# #	apply any patches
+# #
+# 
+# 	${PATCH} -p0 < gcc-2.95.3-full.patch
+#     ${PATCH} -p0 < gcc-2.95.3-arm-pic.patch
+#     ${PATCH} -p0 < gcc-2.95.3-arm-pic.patch2
+#     ${PATCH} -p0 < gcc-2.95.3-arm-mlib.patch
+#     ${PATCH} -p0 < gcc-2.95.3-sigset.patch
+# 	${PATCH} -p0 < gcc-2.95.3-m68k-zext.patch
+# 	${PATCH} --directory gcc-2.95.3 -p1 < gcc-makeinfo-strcpy-overlap.patch
+#     if [ "${CYGWIN}" ]; then
+#         ${PATCH} -p0 < gcc-2.95.3-cygwin-020611.patch
+#     fi
+# 	${PATCH} -p0 < STLport-4.5.3.patch
+# 	${PATCH} --directory=binutils-2.14 -p1 < binutils-2.15-allow-gcc-4.0.patch
+# 	rm -rf gcc-2.95.3/libio
+# 	rm -rf gcc-2.95.3/libstdc++
+# 
+ 	cd ${BUILD_DIR}
+ 	mark 1
 
-	rm -rf gcc-2.95.3/libio
-	rm -rf gcc-2.95.3/libstdc++
-
-	cd $BASEDIR
-	mark 1
 }
 
 #############################################################
@@ -197,16 +315,33 @@ stage1()
 
 stage2()
 {
-	schk 2 || return 0
+  schk 2 || return 0
 
-	rm -rf ${TARGET}-binutils
-	mkdir ${TARGET}-binutils
-	cd ${TARGET}-binutils
-	../binutils-2.10/configure ${HOST_TARGET} --target=${TARGET} ${PREFIXOPT}
-	${MAKE}
-	${MAKE} install
-	cd $BASEDIR
-	mark 2
+  extract_tarball ${SRC_DIR} ${BINUTILS_DIR}
+  patch_sources ${SRC_DIR} ${BINUTILS_DIR}
+  rm -rf ${BUILD_DIR}/build-${BINUTILS_DIR}-${TARGET}
+  mkdir -v ${BUILD_DIR}/build-${BINUTILS_DIR}-${TARGET}
+  cd ${BUILD_DIR}/build-${BINUTILS_DIR}-${TARGET}
+  CC=${HOSTCC_COMMAND} ${SETARCH_COMMAND} ${SRC_DIR}/${BINUTILS_DIR}/configure ${HOST_TARGET} \
+    --target=${TARGET} --prefix=${PREFIX} \
+    --disable-nls
+  ${MAKE}
+  ${MAKE} install
+
+  # remove files not found in original toolchain distribution
+  rm -v -f ${PREFIX}/lib/libiberty.a
+  rm -v -f ${PREFIX}/info/as.info
+  rm -v -f ${PREFIX}/info/bfd.info
+  rm -v -f ${PREFIX}/info/bfd.info*
+  rm -v -f ${PREFIX}/info/binutils.info
+  rm -v -f ${PREFIX}/info/configure.info
+  rm -v -f ${PREFIX}/info/configure.info*
+  rm -v -f ${PREFIX}/info/dir
+  rm -v -f ${PREFIX}/info/ld.info
+  rm -v -f ${PREFIX}/info/standards.info
+
+  cd ${BUILD_DIR}
+  mark 2
 }
 
 #############################################################
@@ -216,12 +351,12 @@ stage2()
 
 fix_uclibc_config()
 {
-	(grep -v KERNEL_SOURCE; echo "KERNEL_SOURCE=\"${KERNEL}\"") |
+	(grep -v KERNEL_SOURCE; echo "KERNEL_SOURCE=\"${SRC_DIR}/${LINUX_DIR}\"") |
 	if [ "${NOMMU}" ]; then
 		egrep -v '(UCLIBC_HAS_MMU|HAVE_SHARED|BUILD_UCLIBC_LDSO)' |
-			egrep -v '(HAS_SHADOW|MALLOC|UNIX98PTY_ONLY|UCLIBC_CTOR_DTOR)' |
+			egrep -v '(HAS_SHADOW|MALLOC=y|MALLOC is not set|UNIX98PTY_ONLY|UCLIBC_CTOR_DTOR)' |
 			egrep -v '(DOPIC|UCLIBC_DYNAMIC_ATEXIT|UCLIBC_MALLOC_DEBUGGING)' |
-			egrep -v '(UCLIBC_HAS_THREADS|UCLIBC_HAS_WCHAR|UCLIBC_HAS_LOCALE)'
+			egrep -v '(UCLIBC_HAS_THREADS|PTHREADS_DEBUG_SUPPORT|UCLIBC_HAS_WCHAR|UCLIBC_HAS_LOCALE)'
 		echo '# UCLIBC_HAS_MMU is not set'
 		echo '# HAVE_SHARED is not set'
 		echo '# BUILD_UCLIBC_LDSO is not set'
@@ -235,6 +370,7 @@ fix_uclibc_config()
 		echo "UCLIBC_HAS_WCHAR=y"
 		echo "# UCLIBC_HAS_LOCALE is not set"
 		echo "UCLIBC_HAS_THREADS=y"
+		echo '# PTHREADS_DEBUG_SUPPORT is not set'
 		echo "# DOPIC is not set"
 	else
 		cat
@@ -248,64 +384,83 @@ fix_uclibc_config()
 
 stage3()
 {
-	schk 3 || return 0
-	# set -x
+  schk 3 || return 0
+  # set -x
 
-	#
-	# fix up the uClibc auto gen files
-	#
-	cd ${UCLIBC}/.
-	fix_uclibc_config < extra/Configs/Config.${_CPU}.default > .config
-	rm -f ${KERNEL}/include/asm
-	rm -f ${KERNEL}/include/asm-${_CPU}${NOMMU}/proc
-	rm -f ${KERNEL}/include/asm-${_CPU}${NOMMU}/arch
-	ln -s ${KERNEL}/include/asm-${_CPU}${NOMMU} ${KERNEL}/include/asm
-	${MAKE} oldconfig CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
-	${MAKE} headers CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
-	chmod 644 include/bits/uClibc_config.h
+  extract_tarball ${SRC_DIR} ${LINUX_DIR}
+  if [ -n "${LINUX_UCLINUX_DIR}" ] ; then
+    patch_kernel_uclinux ${SRC_DIR} ${LINUX_DIR} ${LINUX_UCLINUX_DIR}
+  fi
+  patch_sources ${SRC_DIR} ${LINUX_DIR}
 
-	rm -rf ${PREFIX}/${TARGET}/${sysinclude}
-	rm -f ${UCLIBC}/include/asm
-	cp_Lr ${UCLIBC}/include ${PREFIX}/${TARGET}/${sysinclude}
-	rm -rf ${PREFIX}/${TARGET}/${sysinclude}/asm
-	rm -rf ${PREFIX}/${TARGET}/${sysinclude}/bits
-	cp_Lr ${UCLIBC}/include/bits ${PREFIX}/${TARGET}/${sysinclude}/bits
-	# cp -r ${UCLIBC}/libc/sysdeps/linux/${_CPU}/bits ${PREFIX}/${TARGET}/${sysinclude}/.
-	# cp include/bits/uClibc_config.h ${PREFIX}/${TARGET}/${sysinclude}/bits/.
-	rm -rf ${PREFIX}/${TARGET}/${sysinclude}/linux
-	cp_Lr ${KERNEL}/include/linux ${PREFIX}/${TARGET}/${sysinclude}/linux
-	touch ${PREFIX}/${TARGET}/${sysinclude}/linux/autoconf.h
-	cp_Lr ${KERNEL}/include/asm-${_CPU}${NOMMU} \
-			${PREFIX}/${TARGET}/${sysinclude}/asm-${_CPU}${NOMMU}
+  cd ${SRC_DIR}/${LINUX_DIR}
+  cp ${KERNELCONFIG} .config
+  make ARCH=${_CPU}${NOMMU} oldconfig
+  make ARCH=${_CPU}${NOMMU} dep
+  rm -f ./include/asm
+  rm -f ./include/asm-${_CPU}${NOMMU}/proc
+  rm -f ./include/asm-${_CPU}${NOMMU}/arch
+  ln -v -s asm-${_CPU}${NOMMU} ./include/asm
+  cd ${BUILD_DIR}
 
-	# 2.4 headers also need this (may not be there for some archs)
-	cp_Lr ${KERNEL}/include/asm-${_CPU} \
-			${PREFIX}/${TARGET}/${sysinclude}/asm-${_CPU}  || true
+  extract_tarball ${SRC_DIR} ${UCLIBC_DIR}
+  if [ -d "${SRC_DIR}/uClibc" ] ; then
+    mv "${SRC_DIR}/uClibc" "${SRC_DIR}/${UCLIBC_DIR}"
+  fi
+  patch_sources ${SRC_DIR} ${UCLIBC_DIR}
+  
+  cd ${SRC_DIR}/${UCLIBC_DIR}
+  # remove junk object files, wrong architecture
+  rm -v -rf ./extra/config/*.o ./extra/config/conf ./extra/config/mconf
+  # remove symbolic link to non-existent file
+  rm -v -rf ./include/net/bpf.h
+  cp ${UCLIBCCONFIG} .config.001~
+  fix_uclibc_config < .config.001~ > .config.002~
+  diff -urNp .config.001~ .config.002~ || true
+  cp .config.002~ .config
+  ${MAKE} oldconfig CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
+  ${MAKE} headers CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
+  chmod 644 include/bits/uClibc_config.h
 
-	ln -s ${PREFIX}/${TARGET}/${sysinclude}/asm-${_CPU}${NOMMU} \
-					${PREFIX}/${TARGET}/${sysinclude}/asm
-	
-	case ${TARGET} in
-	arm*)
-		ln -s ${PREFIX}/${TARGET}/${sysinclude}/asm-${_CPU}${NOMMU}/arch-atmel \
-						${PREFIX}/${TARGET}/${sysinclude}/asm/arch
-		ln -s ${PREFIX}/${TARGET}/${sysinclude}/asm-${_CPU}${NOMMU}/proc-armv \
-						${PREFIX}/${TARGET}/${sysinclude}/asm/proc
-		;;
-	esac
+  rm -rf ${PREFIX}/${TARGET}/${sysinclude}
+  rm -f ./include/asm
+  cp -L -r ./include   ${PREFIX}/${TARGET}/${sysinclude}
+  rm -rf ${PREFIX}/${TARGET}/${sysinclude}/asm
+  rm -rf ${PREFIX}/${TARGET}/${sysinclude}/bits
+  cp -L -r ./include/bits ${PREFIX}/${TARGET}/${sysinclude}/bits
+  # cp -r ./libc/sysdeps/linux/${_CPU}/bits ${PREFIX}/${TARGET}/${sysinclude}/.
+  # cp include/bits/uClibc_config.h ${PREFIX}/${TARGET}/${sysinclude}/bits/.
+  rm -rf ${PREFIX}/${TARGET}/${sysinclude}/linux
+  cp -L -r ${SRC_DIR}/${LINUX_DIR}/include/linux ${PREFIX}/${TARGET}/${sysinclude}/linux
+  touch ${PREFIX}/${TARGET}/${sysinclude}/linux/autoconf.h
+  cp -L -r ${SRC_DIR}/${LINUX_DIR}/include/asm-${_CPU}${NOMMU} \
+    ${PREFIX}/${TARGET}/${sysinclude}/asm-${_CPU}${NOMMU}
 
-	#
-	# clean out any CVS files,  don't fail on this one
-	#
-	set +e
-	find ${PREFIX}/${TARGET}/${sysinclude} -name CVS | xargs rm -rf
-	set -e
+  # 2.4 headers also need this (may not be there for some archs)
+  cp -L -r ${SRC_DIR}/${LINUX_DIR}/include/asm-${_CPU} \
+    ${PREFIX}/${TARGET}/${sysinclude}/asm-${_CPU}  || true
 
-	mkdir -p ${PREFIX}/lib/gcc-lib || true
-	chmod 755 ${PREFIX}/lib/gcc-lib
+  ln -v -s asm-${_CPU}${NOMMU} ${PREFIX}/${TARGET}/${sysinclude}/asm
 
-	cd $BASEDIR
-	mark 3
+  case ${TARGET} in
+    arm*)
+      ln -v -s ../asm-${_CPU}${NOMMU}/arch-atmel ${PREFIX}/${TARGET}/${sysinclude}/asm/arch
+      ln -v -s ../asm-${_CPU}${NOMMU}/proc-armv  ${PREFIX}/${TARGET}/${sysinclude}/asm/proc
+      ;;
+  esac
+
+  #
+  # clean out any CVS files,  don't fail on this one
+  #
+  set +e
+  find ${PREFIX}/${TARGET}/${sysinclude} -name CVS | xargs rm -rf
+  set -e
+
+  mkdir -p ${PREFIX}/lib/gcc-lib || true
+  chmod 755 ${PREFIX}/lib/gcc-lib
+
+  cd ${BUILD_DIR}
+  mark 3
 }
 
 #############################################################
@@ -315,18 +470,31 @@ stage3()
 
 stage4()
 {
-	schk 4 || return 0
+  schk 4 || return 0
 
-	rm -rf ${TARGET}-gcc
-	mkdir ${TARGET}-gcc
-	cd ${TARGET}-gcc
-	../gcc-2.95.3/configure ${HOST_TARGET} \
-			--enable-languages=c --target=${TARGET} ${PREFIXOPT}
-	${MAKE}
-	${MAKE} install
+  extract_tarball ${SRC_DIR} ${GCC_DIR}
+  rm -rf ${SRC_DIR}/${GCC_DIR}/libio
+  rm -rf ${SRC_DIR}/${GCC_DIR}/libstdc++
+  patch_sources ${SRC_DIR} ${GCC_DIR}
 
-	cd $BASEDIR
-	mark 4
+  rm -rf ${BUILD_DIR}/build-${GCC_DIR}-${TARGET}-core
+  mkdir -v ${BUILD_DIR}/build-${GCC_DIR}-${TARGET}-core
+  cd ${BUILD_DIR}/build-${GCC_DIR}-${TARGET}-core
+
+  CC=${HOSTCC_COMMAND} ${SETARCH_COMMAND} ${SRC_DIR}/${GCC_DIR}/configure ${HOST_TARGET} \
+     --target=${TARGET} --prefix=${PREFIX} \
+     --enable-languages=c
+  make
+  make install
+  # remove files not found in original toolchain distribution
+  rm -v -f ${PREFIX}/lib/libiberty.a
+  rm -v -f ${PREFIX}/info/cpp.info
+  rm -v -f ${PREFIX}/info/cpp.info*
+  rm -v -f ${PREFIX}/info/gcc.info
+  rm -v -f ${PREFIX}/info/gcc.info*
+
+  cd ${BUILD_DIR}
+  mark 4
 }
 
 #############################################################
@@ -336,33 +504,42 @@ stage4()
 
 stage5()
 {
-	schk 5 || return 0
+  schk 5 || return 0
 
-	cd ${UCLIBC}/.
-	make distclean
-	fix_uclibc_config < extra/Configs/Config.${_CPU}.default > .config
-	rm -f ${KERNEL}/include/asm/proc
-	rm -f ${KERNEL}/include/asm/arch
-	rm -f ${KERNEL}/include/asm
-	ln -s ${KERNEL}/include/asm-${_CPU}${NOMMU} ${KERNEL}/include/asm
-	case ${TARGET} in
-	arm*)
-		ln -s ${KERNEL}/include/asm-${_CPU}${NOMMU}/arch-atmel \
-						${KERNEL}/include/asm/arch
-		ln -s ${KERNEL}/include/asm-${_CPU}${NOMMU}/proc-armv \
-						${KERNEL}/include/asm/proc
-		;;
-	esac
-	rm -rf include/config
-	mkdir include/config
-	touch include/config/autoconf.h
-	${MAKE} oldconfig CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
-	${MAKE} clean CROSS="${TARGET}-" TARGET_ARCH=${_CPU} || true
-	${MAKE} CROSS="${TARGET}-" TARGET_ARCH=${_CPU} ARCH_CFLAGS="-I${KERNEL}/include"
-	rm -rf include/config
+  cd ${SRC_DIR}/${UCLIBC_DIR}
+  make distclean
 
-	cd $BASEDIR
-	mark 5
+  cp ${UCLIBCCONFIG} .config.001~
+  fix_uclibc_config < .config.001~ > .config.002~
+  diff -urNp .config.001~ .config.002~ || true
+  cp .config.002~ .config
+
+  rm -f ${SRC_DIR}/${LINUX_DIR}/include/asm/proc
+  rm -f ${SRC_DIR}/${LINUX_DIR}/include/asm/arch
+  rm -f ${SRC_DIR}/${LINUX_DIR}/include/asm
+  ln -v -s asm-${_CPU}${NOMMU} ${SRC_DIR}/${LINUX_DIR}/include/asm
+
+  case ${TARGET} in
+    arm*)
+      ln -v -s ../asm-${_CPU}${NOMMU}/arch-atmel \
+        ${SRC_DIR}/${LINUX_DIR}/include/asm/arch
+      ln -v -s ../asm-${_CPU}${NOMMU}/proc-armv \
+        ${SRC_DIR}/${LINUX_DIR}/include/asm/proc
+      ;;
+  esac
+
+  rm -rf ./include/config
+  mkdir ./include/config
+  touch include/config/autoconf.h
+
+  ${MAKE} oldconfig CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
+
+  ${MAKE} clean CROSS="${TARGET}-" TARGET_ARCH=${_CPU} || true
+  ${MAKE} CROSS="${TARGET}-" TARGET_ARCH=${_CPU} ARCH_CFLAGS="-I${SRC_DIR}/${LINUX_DIR}/include"
+  rm -rf ./include/config
+
+  cd ${BUILD_DIR}
+  mark 5
 }
 
 #############################################################
@@ -372,72 +549,86 @@ stage5()
 
 stage6()
 {
-	schk 6 || return 0
+  schk 6 || return 0
 
-	#
-	# We need these files for the configure parts of this stage
-	#
-	cp ${UCLIBC}/lib/libc.a ${PREFIX}/${TARGET}/lib/.
-	cp ${UCLIBC}/lib/crt0.o ${PREFIX}/${TARGET}/lib/.
+  local gccver=`expr match "${GCC_DIR}" 'gcc\-\([0-9.]\+\)'`
+  test -n "${gccver}" || abort "Could not detect gcc version in ${GCC_DIR}"
 
-	rm -rf ${TARGET}-gcc
-	mkdir ${TARGET}-gcc
-	cd ${TARGET}-gcc
+  extract_tarball ${SRC_DIR} ${GCC_DIR}
+  rm -rf ${SRC_DIR}/${GCC_DIR}/libio
+  rm -rf ${SRC_DIR}/${GCC_DIR}/libstdc++
+  patch_sources ${SRC_DIR} ${GCC_DIR}
 
-	case "${TARGET}" in
-	arm-*)
-		# create if not there
-		ar rv ${PREFIX}/${TARGET}/lib/libg.a
-		;;
-	esac
+  rm -rf ${BUILD_DIR}/build-${GCC_DIR}-${TARGET}-gcc
+  mkdir -v ${BUILD_DIR}/build-${GCC_DIR}-${TARGET}-gcc
+  cd ${BUILD_DIR}/build-${GCC_DIR}-${TARGET}-gcc
 
-	../gcc-2.95.3/configure ${HOST_TARGET} \
-			--with-gxx-include-dir=${PREFIX}/${TARGET}/stlport \
-			--enable-languages=c,c++ --target=${TARGET} \
-			--enable-multilib ${PREFIXOPT}
-	${MAKE} LIBS=-lc CFLAGS='-Dlinux -D__linux__ -Dunix'
+  #
+  # We need these files for the configure parts of this stage
+  #
+  cp ${SRC_DIR}/${UCLIBC_DIR}/lib/libc.a ${PREFIX}/${TARGET}/lib/.
+  cp ${SRC_DIR}/${UCLIBC_DIR}/lib/crt0.o ${PREFIX}/${TARGET}/lib/.
+  case "${TARGET}" in
+    arm-*)
+      # create if not there
+      ar rv ${PREFIX}/${TARGET}/lib/libg.a
+      ;;
+  esac
 
-	#
-	# Make sure the multilib directories exist, the ARM install misses
-	# these for some reason
-	#
-	for lib in libio libiostream libstdc++
-	do
-		find ${TARGET} -name $lib.a -print | while read file
-		do
-			MLIB=`expr $file : "${TARGET}\(.*\)"`
-			MLIB=`expr $MLIB : "\(.*\)/[^/]*/$lib.a"`
-			if [ ! -d "${PREFIX}/lib/gcc-lib/${TARGET}/2.95.3/$MLIB" ]
-			then
-				echo "Fixing ${PREFIX}/lib/gcc-lib/${TARGET}/2.95.3/$MLIB"
-				mkdir -p "${PREFIX}/lib/gcc-lib/${TARGET}/2.95.3/$MLIB"
-				chmod 755 "${PREFIX}/lib/gcc-lib/${TARGET}/2.95.3/$MLIB"
-			fi
-		done || exit 1
-	done || exit 1
+  CC=${HOSTCC_COMMAND} ${SETARCH_COMMAND} ${SRC_DIR}/${GCC_DIR}/configure ${HOST_TARGET} \
+     --with-gxx-include-dir=${PREFIX}/${TARGET}/stlport \
+     --target=${TARGET} --prefix=${PREFIX} \
+     --enable-languages=c,c++ --enable-multilib
 
-	${MAKE} install
+  ${MAKE} LIBS=-lc CFLAGS='-Dlinux -D__linux__ -Dunix'
 
-	#
-	# The _ctors.o file included in libgcc causes all kinds of random pain
-	# sometimes it gets included and sometimes it doesn't.  By removing it
-	# and using a good linker script (ala elf2flt.ld) all will be happy
-	#
-	find ${PREFIX}/lib/gcc-lib/${TARGET}/. -name libgcc.a -print | while read t
-		do
-			${TARGET}-ar dv "$t" _ctors.o
-		done
+  #
+  # Make sure the multilib directories exist, the ARM install misses
+  # these for some reason
+  #
+  for lib in libio libiostream libstdc++
+  do
+    find ${TARGET} -name $lib.a -print | while read file
+    do
+      MLIB=`expr $file : "${TARGET}\(.*\)"`
+      MLIB=`expr $MLIB : "\(.*\)/[^/]*/$lib.a"`
+      if [ ! -d "${PREFIX}/lib/gcc-lib/${TARGET}/${gccver}/$MLIB" ]
+      then
+        echo "Fixing ${PREFIX}/lib/gcc-lib/${TARGET}/${gccver}/$MLIB"
+        mkdir -p "${PREFIX}/lib/gcc-lib/${TARGET}/${gccver}/$MLIB"
+        chmod 755 "${PREFIX}/lib/gcc-lib/${TARGET}/${gccver}/$MLIB"
+      fi
+    done || exit 1
+  done || exit 1
 
-	#
-	#
-	# Don't leave these around as they will not work for all targets
-	# the proper ones get built later in stage9/stageA
-	#
-	rm -f ${PREFIX}/${TARGET}/lib/libc.a
-	rm -f ${PREFIX}/${TARGET}/lib/crt0.o
+  ${MAKE} install
+  # remove files not found in original toolchain distribution
+  rm -v -f ${PREFIX}/lib/libiberty.a
+  rm -v -f ${PREFIX}/info/cpp.info
+  rm -v -f ${PREFIX}/info/cpp.info*
+  rm -v -f ${PREFIX}/info/gcc.info
+  rm -v -f ${PREFIX}/info/gcc.info*
 
-	cd $BASEDIR
-	mark 6
+  #
+  # The _ctors.o file included in libgcc causes all kinds of random pain
+  # sometimes it gets included and sometimes it doesn't.  By removing it
+  # and using a good linker script (ala elf2flt.ld) all will be happy
+  #
+  find ${PREFIX}/lib/gcc-lib/${TARGET}/. -name libgcc.a -print | while read t
+  do
+    ${TARGET}-ar dv "$t" _ctors.o
+  done
+
+  #
+  #
+  # Don't leave these around as they will not work for all targets
+  # the proper ones get built later in stage9/stageA
+  #
+  rm -f ${PREFIX}/${TARGET}/lib/libc.a
+  rm -f ${PREFIX}/${TARGET}/lib/crt0.o
+
+  cd ${BUILD_DIR}
+  mark 6
 }
 
 #############################################################
@@ -447,19 +638,19 @@ stage6()
 
 stage7()
 {
-	schk 7 || return 0
-	rm -rf genromfs-0.5.1
-	extract genromfs-0.5.1.*
-	cd genromfs-0.5.1
-	if [ "${CYGWIN}" ]; then
-		${PATCH} -p0 < ../genromfs-0.5.1-cygwin-020605.patch
-	fi
-	${MAKE}
-	cp genromfs${EXE} ${PREFIX}/bin/.
-	chmod 755 ${PREFIX}/bin/genromfs${EXE}
+  schk 7 || return 0
+  test -n "${GENROMFS_DIR}" || return 0
 
-	cd $BASEDIR
-	mark 7
+  extract_tarball ${SRC_DIR} ${GENROMFS_DIR}
+  patch_sources ${SRC_DIR} ${GENROMFS_DIR}
+
+  cd ${SRC_DIR}/${GENROMFS_DIR}
+  CC=${HOSTCC_COMMAND} ${MAKE}
+  cp genromfs${EXE} ${PREFIX}/bin/.
+  chmod 755 ${PREFIX}/bin/genromfs${EXE}
+
+  cd ${BUILD_DIR}
+  mark 7
 }
 
 #############################################################
@@ -469,20 +660,26 @@ stage7()
 
 stage8()
 {
-	schk 8 || return 0
+  schk 8 || return 0
+  test -n "${ELF2FLT_DIR}" || return 0
+  
+  extract_tarball ${SRC_DIR} ${ELF2FLT_DIR}
+  if [ -d "${SRC_DIR}/elf2flt" ] ; then
+    mv "${SRC_DIR}/elf2flt" "${SRC_DIR}/${ELF2FLT_DIR}"
+  fi
+  patch_sources ${SRC_DIR} ${ELF2FLT_DIR}
 
+  cd ${SRC_DIR}/${ELF2FLT_DIR}
+  CC=${HOSTCC_COMMAND} ${SETARCH_COMMAND} ./configure ${HOST_TARGET} \
+      --with-libbfd=${BUILD_DIR}/build-${BINUTILS_DIR}-${TARGET}/bfd/libbfd.a \
+      --with-libiberty=${BUILD_DIR}/build-${BINUTILS_DIR}-${TARGET}/libiberty/libiberty.a \
+      --with-bfd-include-dir=${BUILD_DIR}/build-${BINUTILS_DIR}-${TARGET}/bfd \
+      --target=${TARGET} --prefix=${PREFIX}
+  ${MAKE}
+  ${MAKE} install
 
-	cd ${ELF2FLT}
-	./configure ${HOST_TARGET} \
-		--with-libbfd=${BASEDIR}/${TARGET}-binutils/bfd/libbfd.a \
-		--with-libiberty=${BASEDIR}/${TARGET}-binutils/libiberty/libiberty.a \
-		--with-bfd-include-dir=${BASEDIR}/${TARGET}-binutils/bfd \
-		--target=${TARGET} ${PREFIXOPT}
-	${MAKE}
-	${MAKE} install
-
-	cd $BASEDIR
-	mark 8
+  cd ${BUILD_DIR}
+  mark 8
 }
 
 #############################################################
@@ -538,39 +735,46 @@ multilib_table()
 
 stage9()
 {
-	schk 9 || return 0
-	# set -x
-	cd ${UCLIBC}/.
+  schk 9 || return 0
+  # set -x
+  cd ${SRC_DIR}/${UCLIBC_DIR}
 
-	rm -rf include/config
-	mkdir include/config
-	touch include/config/autoconf.h
+  rm -rf include/config
+  mkdir include/config
+  touch include/config/autoconf.h
 
-	multilib_table | while read mlibdir pic cflags
-	do
-		fix_uclibc_config $pic < extra/Configs/Config.${_CPU}.default > .config
-		${MAKE} oldconfig CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
-		${MAKE} clean CROSS="${TARGET}-" TARGET_ARCH=${_CPU} || true
-		cflahs="${cflags} -I${KERNEL}/include"
-		${MAKE} CROSS="${TARGET}-" TARGET_ARCH=${_CPU} ARCH_CFLAGS="${cflags}"
+  multilib_table | while read mlibdir pic cflags
+  do
+    cp ${UCLIBCCONFIG} .config.001~
+    fix_uclibc_config $pic < .config.001~ > .config.002~
+    diff -urNp .config.001~ .config.002~ || true
+    cp .config.002~ .config
 
-		cp lib/crt0.o ${PREFIX}/${TARGET}/lib/$mlibdir/crt0.o || exit 1
-		cp lib/libc.a ${PREFIX}/${TARGET}/lib/$mlibdir/libc.a || exit 1
-		cp lib/libcrypt.a ${PREFIX}/${TARGET}/lib/$mlibdir/libcrypt.a || exit 1
-		cp lib/libm.a ${PREFIX}/${TARGET}/lib/$mlibdir/libm.a || exit 1
-		cp lib/libresolv.a ${PREFIX}/${TARGET}/lib/$mlibdir/libresolv.a || \
-				exit 1
-		cp lib/libutil.a ${PREFIX}/${TARGET}/lib/$mlibdir/libutil.a || exit 1
-		cp lib/libpthread.a ${PREFIX}/${TARGET}/lib/$mlibdir/libpthread.a || exit 1
+    ${MAKE} oldconfig CROSS="${TARGET}-" TARGET_ARCH=${_CPU}
+    ${MAKE} clean CROSS="${TARGET}-" TARGET_ARCH=${_CPU} || true
+    cflags="${cflags} -I${SRC_DIR}/${LINUX_DIR}/include"
+    ${MAKE} CROSS="${TARGET}-" TARGET_ARCH=${_CPU} ARCH_CFLAGS="${cflags}"
 
-		chmod 644 ${PREFIX}/${TARGET}/lib/$mlibdir/libc.a || exit 1
-		chmod 644 ${PREFIX}/${TARGET}/lib/$mlibdir/crt0.o || exit 1
-	done
+    cp lib/crt0.o ${PREFIX}/${TARGET}/lib/$mlibdir/crt0.o || exit 1
+    cp lib/libc.a ${PREFIX}/${TARGET}/lib/$mlibdir/libc.a || exit 1
+    cp lib/libcrypt.a ${PREFIX}/${TARGET}/lib/$mlibdir/libcrypt.a || exit 1
+    cp lib/libm.a ${PREFIX}/${TARGET}/lib/$mlibdir/libm.a || exit 1
+    cp lib/libresolv.a ${PREFIX}/${TARGET}/lib/$mlibdir/libresolv.a || exit 1
+    cp lib/libutil.a ${PREFIX}/${TARGET}/lib/$mlibdir/libutil.a || exit 1
+    cp lib/libpthread.a ${PREFIX}/${TARGET}/lib/$mlibdir/libpthread.a || exit 1
 
-	rm -rf include/config
+    chmod 644 ${PREFIX}/${TARGET}/lib/$mlibdir/libc.a || exit 1
+    chmod 644 ${PREFIX}/${TARGET}/lib/$mlibdir/crt0.o || exit 1
 
-	cd $BASEDIR
-	mark 9
+    # remove files not found in original toolchain distribution
+    rm  -v -f ${PREFIX}/${TARGET}/lib/libc.a
+    rm  -v -f ${PREFIX}/${TARGET}/lib/crt0.o
+  done
+
+  rm -rf include/config
+
+  cd ${BUILD_DIR}
+  mark 9
 }
 
 #############################################################
@@ -580,135 +784,27 @@ stage9()
 
 stageA()
 {
-	schk A || return 0
-	# set -x
+  schk A || return 0
+  # set -x
 
-	cd $BASEDIR/STLport-4.5.3/src
-	multilib_table | while read mlibdir pic cflags
-	do
-		make -f gcc-uclinux-elf.mak ARCH=${_CPU} PREFIX=${PREFIX} \
-				CROSS=${TARGET}- clean
-		make -f gcc-uclinux-elf.mak ARCH=${_CPU} PREFIX=${PREFIX} \
-				CROSS=${TARGET}- ARCH_CFLAGS="${cflags}" all || exit 1
-		cp ../lib/libstdc++.a ${PREFIX}/${TARGET}/lib/$mlibdir/. || exit 1
-	done
+  extract_tarball ${SRC_DIR} ${STLPORT_DIR}
+  patch_sources ${SRC_DIR} ${STLPORT_DIR}
 
-	rm -rf ${PREFIX}/${TARGET}/stlport
-	cp -a ../stlport ${PREFIX}/${TARGET}/.
+  cd ${SRC_DIR}/${STLPORT_DIR}/src
+  multilib_table | while read mlibdir pic cflags
+  do
+    make -f gcc-uclinux-elf.mak ARCH=${_CPU} PREFIX=${PREFIX} CROSS=${TARGET}- clean
+    make -f gcc-uclinux-elf.mak ARCH=${_CPU} PREFIX=${PREFIX} CROSS=${TARGET}- ARCH_CFLAGS="${cflags}" all || exit 1
+    cp ../lib/libstdc++.a ${PREFIX}/${TARGET}/lib/$mlibdir/. || exit 1
+  done
 
-	cd $BASEDIR
-	mark A
+  rm -rf ${PREFIX}/${TARGET}/stlport
+  cp -a ../stlport ${PREFIX}/${TARGET}/.
+
+  cd ${BUILD_DIR}
+  mark A
 }
 
-#############################################################
-#
-# tar up everthing we have built
-#
-
-build_tar_file()
-{
-	# set -x
-	cd /
-
-	EXTRAS=
-	case "${TARGET}" in
-	m68k*)
-		if [ -f ".${PREFIX}/bin/m68k-bdm-elf-gdb${EXE}" ]
-		then
-			EXTRAS=".${PREFIX}/bin/m68k-bdm-elf-gdb${EXE}"
-			EXTRAS="${EXTRAS} .${PREFIX}/bin/m68k-elf-gdb${EXE}"
-			strip ${PREFIX}/bin/m68k-bdm-elf-gdb${EXE}
-			ln -s ${PREFIX}/bin/m68k-bdm-elf-gdb${EXE} \
-					${PREFIX}/bin/m68k-elf-gdb${EXE}
-		fi
-		;;
-	esac
-
-	#
-	# strip the binaries,  make sure we don't strip the libraries (some
-	# platforms allow this :-(
-	#
-	strip ${PREFIX}/bin/genromfs${EXE} > /dev/null 2>&1 || true
-	strip ${PREFIX}/bin/${TARGET}-* > /dev/null 2>&1 || true
-	strip ${PREFIX}/${TARGET}/bin/* > /dev/null 2>&1 || true
-	strip ${PREFIX}/lib/gcc-lib/${TARGET}/2.95.3/*[!a] > /dev/null 2>&1 || true
-
-	#
-	# fix all directories
-	#
-	chmod a+rx .${PREFIX}/bin
-	chmod a+rx .${PREFIX}/lib .${PREFIX}/lib/gcc-lib
-	find .${PREFIX}/${TARGET} .${PREFIX}/lib/gcc-lib/${TARGET} -type d | \
-			xargs chmod a+rw
-	#
-	# tar it all up
-	#
-	tar cvzf $BASEDIR/${TARGET}-tools-${CYGWIN}`date +%Y%m%d`.tar.gz \
-		.${PREFIX}/${TARGET} \
-		.${PREFIX}/lib/gcc-lib/${TARGET} \
-		.${PREFIX}/man/*/${TARGET}-* \
-		.${PREFIX}/bin/${TARGET}-* \
-		.${PREFIX}/bin/genromfs${EXE} \
-		.${PREFIX}/bin/elf2flt${EXE} \
-		.${PREFIX}/bin/flthdr${EXE} \
-		${EXTRAS}
-	
-	#
-	# make an executable out of it that pre-cleans the directory
-	# and checks a few things.
-	#
-
-	cat <<!EOF > $BASEDIR/${TARGET}-tools-${CYGWIN}`date +%Y%m%d`.sh
-#!/bin/sh
-
-SCRIPT="\$0"
-case "\${SCRIPT}" in
-/*)
-	;;
-*)
-	if [ -f "\${SCRIPT}" ]
-	then
-		SCRIPT="\`pwd\`/\${SCRIPT}"
-	else
-		SCRIPT="\`which \${SCRIPT}\`"
-	fi
-	;;
-esac
-
-cd /
-
-if [ ! -f "\${SCRIPT}" ]
-then
-	echo "Cannot find the location of the install script (\$SCRIPT) ?"
-	exit 1
-fi
-
-SKIP=\`awk '/^__ARCHIVE_FOLLOWS__/ { print NR + 1; exit 0; }' \${SCRIPT}\`
-
-if id | grep root > /dev/null
-then
-	:
-else
-	echo "You must be root to install these tools."
-	exit 1
-fi
-
-rm -rf "${PREFIX}/${TARGET}"
-rm -rf "${PREFIX}/lib/gcc-lib/${TARGET}"
-rm -f ${PREFIX}/bin/${TARGET}-*
-
-tail +\${SKIP} \${SCRIPT} | gunzip | tar xvf -
-
-exit 0
-__ARCHIVE_FOLLOWS__
-!EOF
-
-	cat $BASEDIR/${TARGET}-tools-${CYGWIN}`date +%Y%m%d`.tar.gz >> \
-			$BASEDIR/${TARGET}-tools-${CYGWIN}`date +%Y%m%d`.sh
-	chmod 755 $BASEDIR/${TARGET}-tools-${CYGWIN}`date +%Y%m%d`.sh
-
-	cd $BASEDIR
-}
 
 #############################################################
 #
@@ -719,8 +815,8 @@ clean_all()
 {
 	echo "Cleaning everything up..."
 
-	rm -f $BASEDIR/STAGE*
-	rm -rf binutils-2.10
+	rm -f ${BUILD_DIR}/STAGE*
+	rm -rf binutils-2.14
 	rm -rf gcc-2.95.3
 	rm -rf genromfs-0.5.1
 	rm -rf STLport-4.5.3
@@ -740,15 +836,6 @@ m68k*) _CPU=m68k; NOMMU=nommu ;;
 arm*)  _CPU=arm;  NOMMU=nommu ;;
 esac
 
-#
-# if not defined use the GNU tools default of /usr/local
-#
-if [ -z "${PREFIX}" ]
-then
-	PREFIX=/usr/local
-else
-	PREFIXOPT="--prefix=${PREFIX}"
-fi
 
 #
 # setup some Cygwin changes
@@ -762,76 +849,8 @@ else
 	HOST_TARGET=""
 fi
 
-#
-# first check some args
-#
+rm -f ${BUILD_DIR}/STAGE*
 
-case "$1" in
-build)
-	rm -f $BASEDIR/STAGE*
-	;;
-continue)
-	# do nothing here
-	;;
-tar)
-	build_tar_file
-	exit 0
-	;;
-clean)
-	clean_all
-	exit 0
-	;;
-*)
-	echo "usage: $0 (build|continue|clean)" >&2
-	echo ""
-	echo "       build    = build everything from scratch."
-	echo "       continue = continue building from last error."
-	echo "       tar      = build for distribution of binaries."
-	echo "       clean    = clean all temporary files etc."
-	exit 1
-	;;
-esac
-
-#
-# You have to root for this one
-#
-
-if [ "${PREFIXOPT}" ]
-then
-	if [ ! -w "${PREFIX}" ]
-	then
-		echo "Bad,  ${PREFIX} is not writable !"
-		exit 1
-	fi
-else
-	if id | grep root > /dev/null
-	then
-		echo "Good, you are root :-)"
-	else
-		echo "Bad,  you are not root."
-		exit 1
-	fi
-fi
-
-if [ ! -f ${KERNEL}/include/linux/version.h -o \
-		! -f ${KERNEL}/include/linux/autoconf.h ]; then
-	echo "Your kernel is not configured, cannot continue." >&2
-	echo "The following files do not exist:"
-	echo
-	echo "    ${KERNEL}/include/linux/version.h"
-	echo "    ${KERNEL}/include/linux/autoconf.h"
-	echo
-	echo "These are need by the build.  You should do the following:"
-	echo
-	echo "    cd ${KERNEL}"
-	echo "    make ARCH=${_CPU}${NOMMU} oldconfig"
-	echo "    make dep"
-	echo
-	echo "You should then be able to continue."
-	exit 1
-fi
-
-# set -x	# debug script
 set -e		# if anything fails, stop
 
 stage1

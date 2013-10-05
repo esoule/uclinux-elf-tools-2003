@@ -1,0 +1,36 @@
+--- a/arch/m68knommu/platform/5272/Rules.make	2013-09-29 11:29:57.000000000 -0400
++++ b/arch/m68knommu/platform/5272/Rules.make	2013-09-29 11:27:07.000000000 -0400
+@@ -14,7 +14,13 @@
+ # Copyright (C) 1994 by Hamish Macdonald
+ # Copyright (C) 2000  Lineo Inc. (www.lineo.com)
+ 
+-GCC_DIR = $(shell $(CC) -v 2>&1 | grep specs | sed -e 's/.* \(.*\)specs/\1\./')
++GCC_SPECS = $(shell $(CC) -v 2>&1 | grep -F 'Reading specs')
++
++ifneq ($(GCC_SPECS),)
++GCC_DIR = $(shell echo $(GCC_SPECS) | sed -e 's/.* \(.*\)specs/\1\./')
++else
++GCC_DIR = 
++endif
+ 
+ # Even though we're building for a 5272, we specify 5307 as our processor type.
+ # The 5307 instruction set is the same as the 5272 (divide unit & MAC) plus
+@@ -22,10 +28,17 @@
+ # series processors (specifically the multiply and divide instructions which
+ # are all this option really alters).
+ 
++ifneq ($(GCC_DIR),)
+ INCGCC = $(GCC_DIR)/include
++INCGCCOPT = -I$(INCGCC)
+ LIBGCC = $(GCC_DIR)/m5307/libgcc.a
++else
++INCGCC =
++INCGCCOPT =
++LIBGCC =
++endif
+ 
+-CFLAGS := -fno-builtin -nostdinc $(CFLAGS) -I$(INCGCC) -pipe -DNO_MM -DNO_FPU -m5307 -Wa,-S -Wa,-m5307 -D__ELF__ -DMAGIC_ROM_PTR -DUTS_SYSNAME=\"uClinux\" -D__linux__ -O1
++CFLAGS := -fno-builtin -nostdinc $(CFLAGS) $(INCGCCOPT) -pipe -DNO_MM -DNO_FPU -m5307 -Wa,-S -Wa,-m5307 -D__ELF__ -DMAGIC_ROM_PTR -DUTS_SYSNAME=\"uClinux\" -D__linux__ -O1
+ AFLAGS := $(CFLAGS)
+ 
+ LINKFLAGS = -T arch/$(ARCH)/platform/$(PLATFORM)/$(BOARD)/$(MODEL).ld

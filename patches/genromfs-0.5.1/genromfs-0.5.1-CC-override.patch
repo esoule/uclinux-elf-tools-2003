@@ -1,0 +1,12 @@
+diff -urNp a/Makefile b/Makefile
+--- a/Makefile	2002-01-22 04:12:01.000000000 -0500
++++ b/Makefile	2013-09-29 19:00:12.000000000 -0400
+@@ -5,7 +5,7 @@ all: genromfs
+ 
+ PACKAGE = genromfs
+ VERSION = 0.5.1
+-CC = gcc
++CC?= gcc
+ CFLAGS = -O2 -Wall -DVERSION=\"$(VERSION)\"#-g#
+ LDFLAGS = -s#-g
+ 
