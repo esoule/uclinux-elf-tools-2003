@@ -1,0 +1,11 @@
+# Backup files
+*~
+*.old
+*.bak
+*.log
+*.org
+*.orig
+*.rej
+
+/rebuild-uclinux-elf-tools-1.sh
+
