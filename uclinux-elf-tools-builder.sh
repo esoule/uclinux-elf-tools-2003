@@ -39,7 +39,7 @@
 # Unless you modify PREFIX below, you will need to be root to run this
 # script correctly.
 #
-# To build everything run "./build-uclinux-tools.sh build 2>&1 | tee errs"
+# To build everything run "./uclinux-elf-tools-builder.sh build 2>&1 | tee errs"
 #
 # WARNING: it removes all current tools from ${PREFIX},  so back them up
 #          first :-)
