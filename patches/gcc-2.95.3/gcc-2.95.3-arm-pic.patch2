@@ -1,0 +1,14 @@
+#
+# This patch can be found at http://www.uclinux.org/pub/uClinux/m68k-elf-tools/
+#
+--- gcc-2.95.3/gcc/config/arm/arm.h%	Fri Nov 30 20:26:09 2001
++++ gcc-2.95.3/gcc/config/arm/arm.h	Fri Nov 30 20:26:09 2001
+@@ -1277,7 +1277,7 @@
+ 	    if (regs_ever_live[regno] && ! call_used_regs[regno])	\
+ 	      saved_hard_reg = 1, offset += 4;				\
+ 	  /* PIC register is a fixed reg, so call_used_regs set.  */	\
+-	  if (flag_pic && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])	\
++	  if (flag_pic && ! TARGET_SINGLE_PIC_BASE && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])	\
+ 	    saved_hard_reg = 1, offset += 4;				\
+           for (regno = 16; regno <=23; regno++)				\
+ 	    if (regs_ever_live[regno] && ! call_used_regs[regno])	\

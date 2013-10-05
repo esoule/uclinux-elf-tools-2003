@@ -1,0 +1,1663 @@
+#
+# This patch can be found at http://www.uclinux.org/pub/uClinux/m68k-elf-tools/
+#
+diff -u -r gcc-2.95.3-orig/ChangeLog gcc-2.95.3/ChangeLog
+--- gcc-2.95.3-orig/ChangeLog	Fri Mar 16 22:52:01 2001
++++ gcc-2.95.3/ChangeLog	Tue Feb 26 06:52:47 2002
+@@ -2,6 +2,11 @@
+ 
+ 	* gcc-2.95.3 Released.
+ 
++ Tue Feb 13 08:08:47 EST 2001 Paul Dale (pauli@lineo.com)
++ 
++ 	* invoke.teki: Added documentation for the -msep-data and
++ 	-mno-sep-data m68k specific options.
++ 
+ Tue Mar  7 21:48:55 2000  Jeffrey A Law  (law@cygnus.com)
+ 
+ 	* config.guess: Fix detection of ReliantUNIX.
+diff -u -r gcc-2.95.3-orig/gcc/ChangeLog gcc-2.95.3/gcc/ChangeLog
+--- gcc-2.95.3-orig/gcc/ChangeLog	Fri Mar 16 22:52:02 2001
++++ gcc-2.95.3/gcc/ChangeLog	Tue Feb 26 06:52:47 2002
+@@ -27,6 +27,32 @@
+ 	* expr.h (expand_builtin_setjmp, expand_builtin_setjmp_receiver):
+ 	Likewise.
+ 
++2001-02-13  Paul Dale  <pauli@lineo.com>
++ 
++ 	* lb1sf68.asm: Support build of libgcc.a for position
++ 	independent code.
++ 	* m68k-none.h (CPP_SPEC): Define __pic__ and __PIC__ when
++ 	generating position independent code.
++ 	* m68k.c (override_options): Enable -fPIC when -msep-data
++ 	is active.
++ 	* m68k.c (output_function_prologue): Disable A5 save/restore
++ 	code generation when -msep-data is active.
++ 	* m68k.c (output_function_epilogue): Disable A5 restore code
++ 	generation when -msep-data is active.
++ 	* m68k.c (legitimize_pic_address): Don't mark A5 as live if
++ 	the -msep-data option is active.
++ 	* m68k.h: Define the -msep-data and -mno-sep-data options.
++ 	* m68k.h (OVERRIDE_OPTIONS): Allow -fPIC on targets below 68020 and
++ 	enable function common subexpressions if generating position
++ 	independent code that calls functions via the global offset table.
++ 	* m68k.md: Modified PIC call sequences for sub 68020 targets to
++ 	either determine relative address inline or to call functions via
++ 	the global offset table.
++ 	* m68kelf.h (OVERRIDE_OPTIONS): Support -fPIC on sub 68020 targets,
++ 	enable function CSE when calling procedures via the GOT and
++ 	include call to override_options().
++ 	* t-m68kelf: Enable multilib build of -msep-data libraries.
++ 
+ 2001-01-25  Bernd Schmidt  <bernds@redhat.co.uk>
+ 
+ 	* version.c: Bump.
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/lb1sf68.asm gcc-2.95.3/gcc/config/m68k/lb1sf68.asm
+--- gcc-2.95.3-orig/gcc/config/m68k/lb1sf68.asm	Tue Mar  2 01:06:44 1999
++++ gcc-2.95.3/gcc/config/m68k/lb1sf68.asm	Tue Feb 26 06:52:47 2002
+@@ -86,6 +86,36 @@
+ #define a6 REG (a6)
+ #define fp REG (fp)
+ #define sp REG (sp)
++#define pc REG (pc)
++
++/* Provide a few macros to allow for PIC code support.
++ * With PIC, data is stored A5 relative so we've got to take a bit of special
++ * care to ensure that all loads of global data is via A5.  PIC also requires
++ * jumps and subroutine calls to be PC relative rather than absolute.  We cheat
++ * a little on this and in the PIC case, we use short offset branches and
++ * hope that the final object code is within range (which it should be).
++ */
++#ifndef __PIC__
++/* Non pic (absolute/relocatable) versions */
++#define LEA(sym,reg)	lea	sym, reg
++#define PEA(sym,areg)	pea	sym
++#define CALL(addr)	jbsr	addr
++#define JUMP(addr)	jmp	addr
++#else
++#ifdef __ID_SHARED_LIBRARY__
++/* shared library version */
++#define LEA(sym,reg)	movel	a5@(_current_shared_library_a5_offset_), reg;	\
++			movel	CONCAT1(sym, @GOT(reg)), reg
++#define PEA(sym,areg)	movel	a5@(_current_shared_library_a5_offset_), areg;	\
++			movel CONCAT1(sym, @GOT(areg)), sp@-
++#else
++/* msep-data version */
++#define LEA(sym,reg)	movel	CONCAT1(sym, @GOT(a5)), reg
++#define PEA(sym,areg)	movel	CONCAT1(sym, @GOT(a5)), sp@-
++#endif
++#define CALL(addr)	bsr	addr
++#define JUMP(addr)	bra	addr
++#endif
+ 
+ #ifdef L_floatex
+ 
+@@ -213,7 +243,7 @@
+ 
+ | void __clear_sticky_bits(void);
+ SYM (__clear_sticky_bit):		
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ #ifndef __mcf5200__
+ 	movew	IMM (0),a0@(STICK)
+ #else
+@@ -246,7 +276,7 @@
+ FPTRAP = 15
+ 
+ $_exception_handler:
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	d7,a0@(EBITS)	| set __exception_bits
+ #ifndef __mcf5200__
+ 	orw	d7,a0@(STICK)	| and __sticky_bits
+@@ -282,7 +312,7 @@
+ 	andl	d6,d7
+ #endif
+ 	beq	1f		| no, exit
+-	pea	SYM (_fpCCR)	| yes, push address of _fpCCR
++	PEA(	SYM (_fpCCR),a1)| yes, push address of _fpCCR
+ 	trap	IMM (FPTRAP)	| and trap
+ #ifndef __mcf5200__
+ 1:	moveml	sp@+,d2-d7	| restore data registers
+@@ -421,7 +451,7 @@
+ 
+ L2:	movel	d1, sp@-
+ 	movel	d0, sp@-
+-	jbsr	SYM (__udivsi3)	/* divide abs(dividend) by abs(divisor) */
++	CALL(	SYM (__udivsi3))/* divide abs(dividend) by abs(divisor) */
+ 	addql	IMM (8), sp
+ 
+ 	tstb	d2
+@@ -441,13 +471,13 @@
+ 	movel	sp@(4), d0	/* d0 = dividend */
+ 	movel	d1, sp@-
+ 	movel	d0, sp@-
+-	jbsr	SYM (__udivsi3)
++	CALL(	SYM (__udivsi3))
+ 	addql	IMM (8), sp
+ 	movel	sp@(8), d1	/* d1 = divisor */
+ #ifndef __mcf5200__
+ 	movel	d1, sp@-
+ 	movel	d0, sp@-
+-	jbsr	SYM (__mulsi3)	/* d0 = (a/b)*b */
++	CALL(	SYM (__mulsi3))	/* d0 = (a/b)*b */
+ 	addql	IMM (8), sp
+ #else
+ 	mulsl	d1,d0
+@@ -467,13 +497,13 @@
+ 	movel	sp@(4), d0	/* d0 = dividend */
+ 	movel	d1, sp@-
+ 	movel	d0, sp@-
+-	jbsr	SYM (__divsi3)
++	CALL(	SYM (__divsi3))
+ 	addql	IMM (8), sp
+ 	movel	sp@(8), d1	/* d1 = divisor */
+ #ifndef __mcf5200__
+ 	movel	d1, sp@-
+ 	movel	d0, sp@-
+-	jbsr	SYM (__mulsi3)	/* d0 = (a/b)*b */
++	CALL(	SYM (__mulsi3))	/* d0 = (a/b)*b */
+ 	addql	IMM (8), sp
+ #else
+ 	mulsl	d1,d0
+@@ -540,7 +570,7 @@
+ 	orl	d7,d0
+ 	movew	IMM (INEXACT_RESULT+UNDERFLOW),d7
+ 	moveq	IMM (DOUBLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Ld$infty:
+ Ld$overflow:
+@@ -550,7 +580,7 @@
+ 	orl	d7,d0
+ 	movew	IMM (INEXACT_RESULT+OVERFLOW),d7
+ 	moveq	IMM (DOUBLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Ld$underflow:
+ | Return 0 and set the exception flags 
+@@ -558,7 +588,7 @@
+ 	movel	d0,d1
+ 	movew	IMM (INEXACT_RESULT+UNDERFLOW),d7
+ 	moveq	IMM (DOUBLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Ld$inop:
+ | Return a quiet NaN and set the exception flags
+@@ -566,7 +596,7 @@
+ 	movel	d0,d1
+ 	movew	IMM (INEXACT_RESULT+INVALID_OPERATION),d7
+ 	moveq	IMM (DOUBLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Ld$div$0:
+ | Return a properly signed INFINITY and set the exception flags
+@@ -575,7 +605,7 @@
+ 	orl	d7,d0
+ 	movew	IMM (INEXACT_RESULT+DIVIDE_BY_ZERO),d7
+ 	moveq	IMM (DOUBLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ |=============================================================================
+ |=============================================================================
+@@ -1015,8 +1045,8 @@
+ 	addl	IMM (1),d4
+ #endif
+ 1:
+-	lea	Ladddf$5,a0	| to return from rounding routine
+-	lea	SYM (_fpCCR),a1	| check the rounding mode
++	lea	pc@(Ladddf$5),a0 | to return from rounding routine
++	LEA(	SYM (_fpCCR),a1)| check the rounding mode
+ #ifdef __mcf5200__
+ 	clrl	d6
+ #endif
+@@ -1123,8 +1153,8 @@
+ 	addl	IMM (1),d4
+ #endif
+ 1:
+-	lea	Lsubdf$1,a0	| to return from rounding routine
+-	lea	SYM (_fpCCR),a1	| check the rounding mode
++	lea	pc@(Lsubdf$1),a0 | to return from rounding routine
++	LEA(	SYM (_fpCCR),a1)| check the rounding mode
+ #ifdef __mcf5200__
+ 	clrl	d6
+ #endif
+@@ -1168,7 +1198,7 @@
+ #endif
+ 	movel	a6@(16),d0
+ 	movel	a6@(20),d1
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7	| restore data registers
+@@ -1190,7 +1220,7 @@
+ #endif
+ 	movel	a6@(8),d0
+ 	movel	a6@(12),d1
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7	| restore data registers
+@@ -1248,7 +1278,7 @@
+ 
+ Ladddf$ret:
+ | Normal exit.
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ 	orl	d7,d0		| put sign bit back
+ #ifndef __mcf5200__
+@@ -1610,7 +1640,7 @@
+ 	bclr	IMM (31),d2	| clear sign bit
+ 1:	cmpl	IMM (0x7ff00000),d2 | check for non-finiteness
+ 	bge	Ld$inop		| in case NaN or +/-INFINITY return NaN
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7
+@@ -1895,7 +1925,7 @@
+ 	bne	Ld$inop		|
+ 1:	movel	IMM (0),d0	| else return zero
+ 	movel	d0,d1		| 
+-	lea	SYM (_fpCCR),a0	| clear exception flags
++	LEA(	SYM (_fpCCR),a0)| clear exception flags
+ 	movew	IMM (0),a0@	|
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7	| 
+@@ -2035,8 +2065,8 @@
+ 	orl	d7,d3		| the bits which were flushed right
+ 	movel	a0,d7		| get back sign bit into d7
+ | Now call the rounding routine (which takes care of denormalized numbers):
+-	lea	Lround$0,a0	| to return from rounding routine
+-	lea	SYM (_fpCCR),a1	| check the rounding mode
++	lea	pc@(Lround$0),a0 | to return from rounding routine
++	LEA(	SYM (_fpCCR),a1)| check the rounding mode
+ #ifdef __mcf5200__
+ 	clrl	d6
+ #endif
+@@ -2084,7 +2114,7 @@
+ 	swap	d0		|
+ 	orl	d7,d0		| and sign also
+ 
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7
+@@ -2126,7 +2156,7 @@
+ 	movel	d0,d7		| else get sign and return INFINITY
+ 	andl	IMM (0x80000000),d7
+ 	bra	Ld$infty		
+-1:	lea	SYM (_fpCCR),a0
++1:	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7
+@@ -2424,7 +2454,7 @@
+ 	orl	d7,d0
+ 	movew	IMM (INEXACT_RESULT+UNDERFLOW),d7
+ 	moveq	IMM (SINGLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Lf$infty:
+ Lf$overflow:
+@@ -2433,21 +2463,21 @@
+ 	orl	d7,d0
+ 	movew	IMM (INEXACT_RESULT+OVERFLOW),d7
+ 	moveq	IMM (SINGLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Lf$underflow:
+ | Return 0 and set the exception flags 
+ 	movel	IMM (0),d0
+ 	movew	IMM (INEXACT_RESULT+UNDERFLOW),d7
+ 	moveq	IMM (SINGLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Lf$inop:
+ | Return a quiet NaN and set the exception flags
+ 	movel	IMM (QUIET_NaN),d0
+ 	movew	IMM (INEXACT_RESULT+INVALID_OPERATION),d7
+ 	moveq	IMM (SINGLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ Lf$div$0:
+ | Return a properly signed INFINITY and set the exception flags
+@@ -2455,7 +2485,7 @@
+ 	orl	d7,d0
+ 	movew	IMM (INEXACT_RESULT+DIVIDE_BY_ZERO),d7
+ 	moveq	IMM (SINGLE_FLOAT),d6
+-	jmp	$_exception_handler
++	JUMP(	$_exception_handler)
+ 
+ |=============================================================================
+ |=============================================================================
+@@ -2737,8 +2767,8 @@
+ #endif
+ 	addl	IMM (1),d2
+ 1:
+-	lea	Laddsf$4,a0	| to return from rounding routine
+-	lea	SYM (_fpCCR),a1	| check the rounding mode
++	lea	pc@(Laddsf$4),a0 | to return from rounding routine
++	LEA(	SYM (_fpCCR),a1)| check the rounding mode
+ #ifdef __mcf5200__
+ 	clrl	d6
+ #endif
+@@ -2802,8 +2832,8 @@
+ | Note that we do not have to normalize, since in the subtraction bit
+ | #FLT_MANT_DIG+1 is never set, and denormalized numbers are handled by
+ | the rounding routines themselves.
+-	lea	Lsubsf$1,a0	| to return from rounding routine
+-	lea	SYM (_fpCCR),a1	| check the rounding mode
++	lea	pc@(Lsubsf$1),a0 | to return from rounding routine
++	LEA(	SYM (_fpCCR),a1)| check the rounding mode
+ #ifdef __mcf5200__
+ 	clrl	d6
+ #endif
+@@ -2834,7 +2864,7 @@
+ | check for finiteness or zero).
+ Laddsf$a$small:
+ 	movel	a6@(12),d0
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7	| restore data registers
+@@ -2848,7 +2878,7 @@
+ 
+ Laddsf$b$small:
+ 	movel	a6@(8),d0
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7	| restore data registers
+@@ -2905,7 +2935,7 @@
+ Laddsf$ret:
+ | Normal exit (a and b nonzero, result is not NaN nor +/-infty).
+ | We have to clear the exception flags (just the exception type).
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ 	orl	d7,d0		| put sign bit
+ #ifndef __mcf5200__
+@@ -3141,7 +3171,7 @@
+ 1:	bclr	IMM (31),d1	| clear sign bit 
+ 	cmpl	IMM (INFINITY),d1 | and check for a large exponent
+ 	bge	Lf$inop		| if b is +/-INFINITY or NaN return NaN
+-	lea	SYM (_fpCCR),a0	| else return zero
++	LEA(	SYM (_fpCCR),a0)| else return zero
+ 	movew	IMM (0),a0@	| 
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7	| 
+@@ -3341,7 +3371,7 @@
+ 	cmpl	IMM (INFINITY),d1	| check for NaN
+ 	bhi	Lf$inop			| 
+ 	movel	IMM (0),d0		| else return zero
+-	lea	SYM (_fpCCR),a0		|
++	LEA(	SYM (_fpCCR),a0)	|
+ 	movew	IMM (0),a0@		|
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7		| 
+@@ -3444,8 +3474,8 @@
+ 2:	orl	d6,d1		| this is a trick so we don't lose  '
+ 				| the extra bits which were flushed right
+ | Now call the rounding routine (which takes care of denormalized numbers):
+-	lea	Lround$0,a0	| to return from rounding routine
+-	lea	SYM (_fpCCR),a1	| check the rounding mode
++	lea	pc@(Lround$0),a0 | to return from rounding routine
++	LEA(	SYM (_fpCCR),a1)| check the rounding mode
+ #ifdef __mcf5200__
+ 	clrl	d6
+ #endif
+@@ -3493,7 +3523,7 @@
+ 	swap	d0		|
+ 	orl	d7,d0		| and sign also
+ 
+-	lea	SYM (_fpCCR),a0
++	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7
+@@ -3534,7 +3564,7 @@
+ 	movel	d0,d7		| else get sign and return INFINITY
+ 	andl	IMM (0x80000000),d7
+ 	bra	Lf$infty		
+-1:	lea	SYM (_fpCCR),a0
++1:	LEA(	SYM (_fpCCR),a0)
+ 	movew	IMM (0),a0@
+ #ifndef __mcf5200__
+ 	moveml	sp@+,d2-d7
+@@ -3742,7 +3772,7 @@
+ 	movl	a6@(16),sp@-
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpdf2)
++	CALL(	SYM (__cmpdf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_eqdf2 */
+@@ -3757,7 +3787,7 @@
+ 	movl	a6@(16),sp@-
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpdf2)
++	CALL(	SYM (__cmpdf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_nedf2 */
+@@ -3772,7 +3802,7 @@
+ 	movl	a6@(16),sp@-
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpdf2)
++	CALL(	SYM (__cmpdf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_gtdf2 */
+@@ -3787,7 +3817,7 @@
+ 	movl	a6@(16),sp@-
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpdf2)
++	CALL(	SYM (__cmpdf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_gedf2 */
+@@ -3802,7 +3832,7 @@
+ 	movl	a6@(16),sp@-
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpdf2)
++	CALL(	SYM (__cmpdf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_ltdf2 */
+@@ -3817,7 +3847,7 @@
+ 	movl	a6@(16),sp@-
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpdf2)
++	CALL(	SYM (__cmpdf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_ledf2 */
+@@ -3833,7 +3863,7 @@
+ 	link	a6,IMM (0)
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpsf2)
++	CALL(	SYM (__cmpsf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_eqsf2 */
+@@ -3846,7 +3876,7 @@
+ 	link	a6,IMM (0)
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpsf2)
++	CALL(	SYM (__cmpsf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_nesf2 */
+@@ -3859,7 +3889,7 @@
+ 	link	a6,IMM (0)
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpsf2)
++	CALL(	SYM (__cmpsf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_gtsf2 */
+@@ -3872,7 +3902,7 @@
+ 	link	a6,IMM (0)
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpsf2)
++	CALL(	SYM (__cmpsf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_gesf2 */
+@@ -3885,7 +3915,7 @@
+ 	link	a6,IMM (0)
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpsf2)
++	CALL(	SYM (__cmpsf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_ltsf2 */
+@@ -3898,7 +3928,7 @@
+ 	link	a6,IMM (0)
+ 	movl	a6@(12),sp@-
+ 	movl	a6@(8),sp@-
+-	jbsr	SYM (__cmpsf2)
++	CALL(	SYM (__cmpsf2))
+ 	unlk	a6
+ 	rts
+ #endif /* L_lesf2 */
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/m68k-none.h gcc-2.95.3/gcc/config/m68k/m68k-none.h
+--- gcc-2.95.3-orig/gcc/config/m68k/m68k-none.h	Thu Dec 17 07:06:54 1998
++++ gcc-2.95.3/gcc/config/m68k/m68k-none.h	Tue Feb 26 06:52:47 2002
+@@ -97,7 +97,7 @@
+ #undef CPP_FPU_SPEC
+ #if TARGET_DEFAULT & MASK_68881
+ #define CPP_FPU_SPEC "\
+-%{!mc68000:%{!m68000:%{!m68302:%{!mcpu32:%{!m68332:%{!m5200:%{!msoft-float:%{!mno-68881:%{!mfpa:%{!msky:-D__HAVE_68881__ }}}}}}}}}} \
++%{!mc68000:%{!m68000:%{!m68302:%{!mcpu32:%{!m68332:%{!m5200:%{!m5307:%{!msoft-float:%{!mno-68881:%{!mfpa:%{!msky:-D__HAVE_68881__ }}}}}}}}}}} \
+ %{m68881:-D__HAVE_68881__ }%{mfpa:-D__HAVE_FPA__ }%{msky:-D__HAVE_SKY__ }"
+ #else
+ /* This can't currently happen, but we code it anyway to show how it's done.  */
+@@ -126,6 +126,7 @@
+    -m68332: define mc68332 mcpu32
+    -mcpu32: define mcpu32
+    -m5200: define mcf5200
++   -m5307: define mcf5307
+    default: define as above appropriately
+ 
+    GCC won't automatically add __'d versions, we have to mention them
+@@ -133,9 +134,10 @@
+ 
+ #undef CPP_SPEC
+ #define CPP_SPEC "\
+-%(cpp_fpu)%{!ansi:%{m68302:-Dmc68302 }%{m68010:-Dmc68010 }%{m68020:-Dmc68020 }%{mc68020:-Dmc68020 }%{m68030:-Dmc68030 }%{m68040:-Dmc68040 }%{m68020-40:-Dmc68020 -Dmc68030 -Dmc68040 }%{m68020-60:-Dmc68020 -Dmc68030 -Dmc68040 -Dmc68060 }%{m68060:-Dmc68060 }%{mcpu32:-Dmcpu32 } %{m68332:-Dmc68332 -Dmcpu32 }%{m5200:-Dmcf5200 }} \
+-%{m68302:-D__mc68302__ -D__mc68302 }%{m68010:-D__mc68010__ -D__mc68010 }%{m68020:-D__mc68020__ -D__mc68020 }%{mc68020:-D__mc68020__ -D__mc68020 }%{m68030:-D__mc68030__ -D__mc68030 }%{m68040:-D__mc68040__ -D__mc68040 }%{m68020-40:-D__mc68020__ -D__mc68030__ -D__mc68040__ -D__mc68020 -D__mc68030 -D__mc68040 }%{m68020-60:-D__mc68020__ -D__mc68030__ -D__mc68040__ -D__mc68020 -D__mc68030 -D__mc68040 -D__mc68060__ -D__mc68060 }%{m68060:-D__mc68060__ -D__mc68060 }%{mcpu32:-D__mcpu32__ -D__mcpu32 }%{m68332:-D__mc68332__ -D__mc68332 -D__mcpu32__ -D__mcpu32 }%{m5200:-D__mcf5200__ -D__mcf5200 } \
+-%{!mc68000:%{!m68000:%{!m68302:%{!m68010:%{!mc68020:%{!m68020:%{!m68030:%{!m68040:%{!m68020-40:%{!m68020-60:%{!m68060:%{!mcpu32: %{!m68332:%{!m5200:%(cpp_cpu_default)}}}}}}}}}}}}}} \
++%(cpp_fpu)%{!ansi:%{m68302:-Dmc68302 }%{m68010:-Dmc68010 }%{m68020:-Dmc68020 }%{mc68020:-Dmc68020 }%{m68030:-Dmc68030 }%{m68040:-Dmc68040 }%{m68020-40:-Dmc68020 -Dmc68030 -Dmc68040 }%{m68020-60:-Dmc68020 -Dmc68030 -Dmc68040 -Dmc68060 }%{m68060:-Dmc68060 }%{mcpu32:-Dmcpu32 } %{m68332:-Dmc68332 -Dmcpu32 }%{m5200:-Dmcf5200 }%{m5307:-Dmcf5307 -Dmcf5200 }} \
++%{m68302:-D__mc68302__ -D__mc68302 }%{m68010:-D__mc68010__ -D__mc68010 }%{m68020:-D__mc68020__ -D__mc68020 }%{mc68020:-D__mc68020__ -D__mc68020 }%{m68030:-D__mc68030__ -D__mc68030 }%{m68040:-D__mc68040__ -D__mc68040 }%{m68020-40:-D__mc68020__ -D__mc68030__ -D__mc68040__ -D__mc68020 -D__mc68030 -D__mc68040 }%{m68020-60:-D__mc68020__ -D__mc68030__ -D__mc68040__ -D__mc68020 -D__mc68030 -D__mc68040 -D__mc68060__ -D__mc68060 }%{m68060:-D__mc68060__ -D__mc68060 }%{mcpu32:-D__mcpu32__ -D__mcpu32 }%{m68332:-D__mc68332__ -D__mc68332 -D__mcpu32__ -D__mcpu32 }%{m5200:-D__mcf5200__ -D__mcf5200 }%{m5307:-D__mcf5307__ -D__mcf5307 -D__mcf5200__ -D__mcf5200 } \
++%{!mc68000:%{!m68000:%{!m68302:%{!m68010:%{!mc68020:%{!m68020:%{!m68030:%{!m68040:%{!m68020-40:%{!m68020-60:%{!m68060:%{!mcpu32: %{!m68332:%{!m5200:%{!m5307:%(cpp_cpu_default)}}}}}}}}}}}}}}} \
++%{fPIC:-D__PIC__ -D__pic__} %{fpic:-D__PIC__ -D__pic__} %{msep-data:-D__PIC__ -D__pic__} %{mid-shared-library:-D__PIC__ -D__pic__ -D__ID_SHARED_LIBRARY__} \
+ %(cpp_subtarget) \
+ "
+ 
+@@ -143,7 +145,8 @@
+ 
+ #undef ASM_SPEC
+ #define ASM_SPEC "\
+-%{m68851}%{mno-68851}%{m68881}%{mno-68881}%{msoft-float:-mno-68881 }%{m68000}%{m68302}%{mc68000}%{m68010}%{m68020}%{mc68020}%{m68030}%{m68040}%{m68020-40:-mc68040 }%{m68020-60:-mc68040 }%{m68060}%{mcpu32}%{m68332}%{m5200}%{!mc68000:%{!m68000:%{!m68302:%{!m68010:%{!mc68020:%{!m68020:%{!m68030:%{!m68040:%{!m68020-40:%{!m68020-60:%{!m68060:%{!mcpu32:%{!m68332:%{!m5200:%(asm_cpu_default) }}}}}}}}}}}}}} \
++%{m68851}%{mno-68851}%{m68881}%{mno-68881}%{msoft-float:-mno-68881 }%{m68000}%{m68302}%{mc68000}%{m68010}%{m68020}%{mc68020}%{m68030}%{m68040}%{m68020-40:-mc68040 }%{m68020-60:-mc68040 }%{m68060}%{mcpu32}%{m68332}%{m5200}%{m5307}%{mhwdiv}%{mno-hwdiv}%{mmac}%{mno-mac}%{!mc68000:%{!m68000:%{!m68302:%{!m68010:%{!mc68020:%{!m68020:%{!m68030:%{!m68040:%{!m68020-40:%{!m68020-60:%{!m68060:%{!mcpu32:%{!m68332:%{!m5200:%{!m5307:%(asm_cpu_default) }}}}}}}}}}}}}}} \
++%{fPIC:--pcrel} %{fpic:--pcrel} %{msep-data:--pcrel}  %{mid-shared-library:--pcrel} \
+ "
+ 
+ /* cc1/cc1plus always receives all the -m flags. If the specs strings above 
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/m68k.c gcc-2.95.3/gcc/config/m68k/m68k.c
+--- gcc-2.95.3-orig/gcc/config/m68k/m68k.c	Mon Aug  2 14:51:08 1999
++++ gcc-2.95.3/gcc/config/m68k/m68k.c	Tue Feb 26 08:14:52 2002
+@@ -38,6 +38,17 @@
+ /* Needed for use_return_insn.  */
+ #include "flags.h"
+ 
++#define MUST_SAVE_REGISTER(regno)					\
++ (! TREE_THIS_VOLATILE (current_function_decl)				\
++   && (regno != STACK_POINTER_REGNUM)					\
++   /* Save any call saved register that was used.  */			\
++   && (regs_ever_live[regno] && !call_used_regs[regno])			\
++   /* Save any register used in an interrupt handler.	 */		\
++   || (regs_ever_live[regno] && interrupt_handler)			\
++   /* Save call clobbered registers in non-leaf interrupt handlers. */	\
++   || (call_used_regs[regno] && interrupt_handler && !current_function_is_leaf))
++ 
++
+ #ifdef SUPPORT_SUN_FPA
+ 
+ /* Index into this array by (register number >> 3) to find the
+@@ -63,6 +74,8 @@
+ const char *m68k_align_jumps_string;
+ /* Specify power of two alignment used for functions. */
+ const char *m68k_align_funcs_string;
++/* Specified the identification number of the library being built */
++const char *m68k_library_id_string;
+ 
+ /* Specify power of two alignment used for loops. */
+ int m68k_align_loops;
+@@ -70,6 +83,8 @@
+ int m68k_align_jumps;
+ /* Specify power of two alignment used for functions. */
+ int m68k_align_funcs;
++/* Specify library identification number */
++int m68k_library_id;
+ 
+ /* Nonzero if the last compare/test insn had FP operands.  The
+    sCC expanders peek at this to determine what to do for the
+@@ -124,6 +139,32 @@
+     }
+   else
+     m68k_align_funcs = def_align;
++
++  /* Library identification */
++  if (m68k_library_id_string)
++    {
++      if (! TARGET_ID_SHARED_LIBRARY)
++	fatal("-mshared-library-id= specified without -mid-shared-library");
++      m68k_library_id = atoi (m68k_library_id_string);
++      if (m68k_library_id < 0 || m68k_library_id > MAX_LIBRARY_ID)
++	fatal ("-mshared-library-id=%d is not between 0 and %d",
++	       m68k_library_id, MAX_LIBRARY_ID);
++    }
++  else
++    m68k_library_id = -1;
++
++  /* Sanity check to ensure that msep-data and mid-sahred-library are not
++   * both specified together.  Doing so simply doesn't make sense.
++   */
++  if (TARGET_SEP_DATA && TARGET_ID_SHARED_LIBRARY)
++    fatal("cannot specify both -msep-data and -mid-sahred-library");
++
++  /* If we're generating code for a separate A5 relative data segment,
++   * we've got to enable -fPIC as well.  This might be relaxable to
++   * -fpic but it hasn't been tested properly.
++   */
++  if (TARGET_SEP_DATA || TARGET_ID_SHARED_LIBRARY)
++    flag_pic = 2;
+ }
+ 
+ /* This function generates the assembly code for function entry.
+@@ -150,6 +191,7 @@
+   extern char call_used_regs[];
+   int fsize = (size + 3) & -4;
+   int cfa_offset = INCOMING_FRAME_SP_OFFSET, cfa_store_offset = cfa_offset;
++  int interrupt_handler = m68k_interrupt_function_p (current_function_decl);
+   
+ 
+   if (frame_pointer_needed)
+@@ -287,7 +329,7 @@
+     }
+ #ifdef SUPPORT_SUN_FPA
+   for (regno = 24; regno < 56; regno++)
+-    if (regs_ever_live[regno] && ! call_used_regs[regno])
++    if (MUST_SAVE_REGISTER(regno))
+       {
+ #ifdef MOTOROLA
+ 	asm_fprintf (stream, "\tfpmovd %s,-(%Rsp)\n",
+@@ -313,7 +355,7 @@
+   if (TARGET_68881)
+     {
+       for (regno = 16; regno < 24; regno++)
+-	if (regs_ever_live[regno] && ! call_used_regs[regno])
++	if (MUST_SAVE_REGISTER(regno))
+ 	  {
+ 	    mask |= 1 << (regno - 16);
+ 	    num_saved_regs++;
+@@ -346,7 +388,7 @@
+       num_saved_regs = 0;
+     }
+   for (regno = 0; regno < 16; regno++)
+-    if (regs_ever_live[regno] && ! call_used_regs[regno])
++    if (MUST_SAVE_REGISTER(regno))
+       {
+         mask |= 1 << (15 - regno);
+         num_saved_regs++;
+@@ -356,7 +398,9 @@
+       mask &= ~ (1 << (15 - FRAME_POINTER_REGNUM));
+       num_saved_regs--;
+     }
+-  if (flag_pic && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
++  if (! TARGET_SEP_DATA && flag_pic &&
++		  (regs_ever_live[PIC_OFFSET_TABLE_REGNUM] ||
++		   ( ! current_function_is_leaf && TARGET_ID_SHARED_LIBRARY)))
+     {
+       mask |= 1 << (15 - PIC_OFFSET_TABLE_REGNUM);
+       num_saved_regs++;
+@@ -462,18 +506,39 @@
+ 				  -cfa_store_offset + n_regs++ * 4);
+ 	}
+     }
+-  if (flag_pic && current_function_uses_pic_offset_table)
++  if (! TARGET_SEP_DATA && flag_pic &&
++		  (current_function_uses_pic_offset_table ||
++		   ( ! current_function_is_leaf && TARGET_ID_SHARED_LIBRARY)))
+     {
++      if (! TARGET_ID_SHARED_LIBRARY)
++	{
+ #ifdef MOTOROLA
+-      asm_fprintf (stream, "\t%Olea (%Rpc, %U_GLOBAL_OFFSET_TABLE_@GOTPC), %s\n",
+-		   reg_names[PIC_OFFSET_TABLE_REGNUM]);
++	  asm_fprintf (stream, "\t%Olea (%Rpc, %U_GLOBAL_OFFSET_TABLE_@GOTPC), %s\n",
++		       reg_names[PIC_OFFSET_TABLE_REGNUM]);
+ #else
+-      asm_fprintf (stream, "\tmovel %0I__GLOBAL_OFFSET_TABLE_, %s\n",
+-		   reg_names[PIC_OFFSET_TABLE_REGNUM]);
+-      asm_fprintf (stream, "\tlea %Rpc@(0,%s:l),%s\n",
+-		   reg_names[PIC_OFFSET_TABLE_REGNUM],
+-		   reg_names[PIC_OFFSET_TABLE_REGNUM]);
++	  asm_fprintf (stream, "\tmovel %0I__GLOBAL_OFFSET_TABLE_, %s\n",
++		       reg_names[PIC_OFFSET_TABLE_REGNUM]);
++	  asm_fprintf (stream, "\tlea %Rpc@(0,%s:l),%s\n",
++		       reg_names[PIC_OFFSET_TABLE_REGNUM],
++		       reg_names[PIC_OFFSET_TABLE_REGNUM]);
+ #endif
++	}
++      else
++	{
++	  if (m68k_library_id > 0)
++	    {
++	      asm_fprintf (stream, "\tmovel %s@(%d), %s\n",
++			   reg_names[PIC_OFFSET_TABLE_REGNUM],
++			   m68k_library_id * -4 - 4,
++			   reg_names[PIC_OFFSET_TABLE_REGNUM]);
++	    }
++	  else
++	    {
++	      asm_fprintf (stream, "\tmovel %s@(_current_shared_library_a5_offset_), %s\n",
++			   reg_names[PIC_OFFSET_TABLE_REGNUM],
++			   reg_names[PIC_OFFSET_TABLE_REGNUM]);
++	    }
++	}
+     }
+ }
+ 
+@@ -483,15 +554,23 @@
+ use_return_insn ()
+ {
+   int regno;
++  int interrupt_handler = m68k_interrupt_function_p (current_function_decl);
+ 
+   if (!reload_completed || frame_pointer_needed || get_frame_size () != 0)
+     return 0;
+   
++  /* Check for needing a5 for PIC duties and thus epilogue... */
++  if (! TARGET_SEP_DATA && flag_pic &&
++		  (regs_ever_live[PIC_OFFSET_TABLE_REGNUM] ||
++		   current_function_uses_pic_offset_table ||
++		   ( ! current_function_is_leaf && TARGET_ID_SHARED_LIBRARY)))
++    return 0;
++  
+   /* Copied from output_function_epilogue ().  We should probably create a
+      separate layout routine to perform the common work.  */
+   
+   for (regno = 0 ; regno < FIRST_PSEUDO_REGISTER ; regno++)
+-    if (regs_ever_live[regno] && ! call_used_regs[regno])
++    if (MUST_SAVE_REGISTER(regno))
+       return 0;
+   
+   return 1;
+@@ -519,6 +598,7 @@
+   int big = 0;
+   rtx insn = get_last_insn ();
+   int restore_from_sp = 0;
++  int interrupt_handler = m68k_interrupt_function_p (current_function_decl);
+   
+   /* If the last insn was a BARRIER, we don't have to write any code.  */
+   if (GET_CODE (insn) == NOTE)
+@@ -544,7 +624,7 @@
+   nregs = 0;  fmask = 0; fpoffset = 0;
+ #ifdef SUPPORT_SUN_FPA
+   for (regno = 24 ; regno < 56 ; regno++)
+-    if (regs_ever_live[regno] && ! call_used_regs[regno])
++    if (MUST_SAVE_REGISTER(regno))
+       nregs++;
+   fpoffset = nregs * 8;
+ #endif
+@@ -552,7 +632,7 @@
+   if (TARGET_68881)
+     {
+       for (regno = 16; regno < 24; regno++)
+-	if (regs_ever_live[regno] && ! call_used_regs[regno])
++	if (MUST_SAVE_REGISTER(regno))
+ 	  {
+ 	    nregs++;
+ 	    fmask |= 1 << (23 - regno);
+@@ -563,12 +643,14 @@
+   if (frame_pointer_needed)
+     regs_ever_live[FRAME_POINTER_REGNUM] = 0;
+   for (regno = 0; regno < 16; regno++)
+-    if (regs_ever_live[regno] && ! call_used_regs[regno])
++    if (MUST_SAVE_REGISTER(regno))
+       {
+         nregs++;
+ 	mask |= 1 << regno;
+       }
+-  if (flag_pic && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
++  if (! TARGET_SEP_DATA && flag_pic &&
++		  (regs_ever_live[PIC_OFFSET_TABLE_REGNUM] ||
++		   ( ! current_function_is_leaf && TARGET_ID_SHARED_LIBRARY)))
+     {
+       nregs++;
+       mask |= 1 << PIC_OFFSET_TABLE_REGNUM;
+@@ -583,14 +665,28 @@
+       && ! restore_from_sp
+       && (mask || fmask || fpoffset))
+     {
++      /* Because the ColdFire doesn't support moveml with
++         complex address modes we make an extra correction here */
++      if (TARGET_5200)
++        {
++#ifdef MOTOROLA
++          asm_fprintf (stream, "\t%Omove.l %0I%d,%Ra1\n", -fsize - offset);
++#else
++          asm_fprintf (stream, "\tmovel %0I%d,%Ra1\n", -fsize - offset );
++#endif
++        }
++      else
++        {
+ #ifdef MOTOROLA
+-      asm_fprintf (stream, "\t%Omove.l %0I%d,%Ra1\n", -fsize);
++          asm_fprintf (stream, "\t%Omove.l %0I%d,%Ra1\n", -fsize);
+ #else
+-      asm_fprintf (stream, "\tmovel %0I%d,%Ra1\n", -fsize);
++          asm_fprintf (stream, "\tmovel %0I%d,%Ra1\n", -fsize);
+ #endif
++        }
++
+       fsize = 0, big = 1;
+     }
+-  if (TARGET_5200 || nregs <= 2)
++  if (nregs <= 2)
+     {
+       /* Restore each separately in the same order moveml does.
+          Using two movel instructions instead of a single moveml
+@@ -644,41 +740,85 @@
+     }
+   else if (mask)
+     {
+-      if (big)
+-	{
++      /* The ColdFire requires special handling due to its limited moveml insn */
++      if (TARGET_5200)
++        {
++
++          if (big)
++            {
+ #ifdef MOTOROLA
+-	  asm_fprintf (stream, "\tmovm.l -%d(%s,%Ra1.l),%0I0x%x\n",
+-		       offset + fsize,
+-		       reg_names[FRAME_POINTER_REGNUM],
+-		       mask);
++              asm_fprintf (stream, "\tadd.l %s,%Ra1\n", reg_names[FRAME_POINTER_REGNUM]);
++              asm_fprintf (stream, "\tmovm.l (%Ra1),%0I0x%x\n", mask);
+ #else
+-	  asm_fprintf (stream, "\tmoveml %s@(-%d,%Ra1:l),%0I0x%x\n",
+-		       reg_names[FRAME_POINTER_REGNUM],
+-		       offset + fsize, mask);
++              asm_fprintf (stream, "\taddl %s,%Ra1\n", reg_names[FRAME_POINTER_REGNUM]);
++              asm_fprintf (stream, "\tmoveml %Ra1@,%0I0x%x\n", mask);
+ #endif
+-	}
+-      else if (restore_from_sp)
+-	{
++            }
++          else if (restore_from_sp)
++            {
+ #ifdef MOTOROLA
+-	  asm_fprintf (stream, "\tmovm.l (%Rsp)+,%0I0x%x\n", mask);
++              asm_fprintf (stream, "\tmovm.l (%Rsp),%0I0x%x\n", mask);
++              asm_fprintf (stream, "\tlea (%d,%Rsp),%Rsp\n", nregs*4);
+ #else
+-	  asm_fprintf (stream, "\tmoveml %Rsp@+,%0I0x%x\n", mask);
++              asm_fprintf (stream, "\tmoveml %Rsp@,%0I0x%x\n", mask);
++              asm_fprintf (stream, "\tlea %Rsp@(%d),%Rsp\n", nregs*4);
+ #endif
+-	}
++
++            }
++          else
++            {
++#ifdef MOTOROLA
++              asm_fprintf (stream, "\tmovm.l -%d(%s),%0I0x%x\n",
++                           offset + fsize,
++                           reg_names[FRAME_POINTER_REGNUM],
++                           mask);
++#else
++              asm_fprintf (stream, "\tmoveml %s@(-%d),%0I0x%x\n",
++                           reg_names[FRAME_POINTER_REGNUM],
++                           offset + fsize, mask);
++#endif
++	    }
++
++        }
+       else
+-	{
++        {
++          if (big)
++            {
+ #ifdef MOTOROLA
+-	  asm_fprintf (stream, "\tmovm.l -%d(%s),%0I0x%x\n",
+-		       offset + fsize,
+-		       reg_names[FRAME_POINTER_REGNUM],
+-		       mask);
++              asm_fprintf (stream, "\tmovm.l -%d(%s,%Ra1.l),%0I0x%x\n",
++                           offset + fsize,
++                           reg_names[FRAME_POINTER_REGNUM],
++                           mask);
+ #else
+-	  asm_fprintf (stream, "\tmoveml %s@(-%d),%0I0x%x\n",
+-		       reg_names[FRAME_POINTER_REGNUM],
+-		       offset + fsize, mask);
++              asm_fprintf (stream, "\tmoveml %s@(-%d,%Ra1:l),%0I0x%x\n",
++                           reg_names[FRAME_POINTER_REGNUM],
++                           offset + fsize, mask);
+ #endif
+-	}
+-    }
++            }
++          else if (restore_from_sp)
++            {
++#ifdef MOTOROLA
++              asm_fprintf (stream, "\tmovm.l (%Rsp)+,%0I0x%x\n", mask);
++#else
++              asm_fprintf (stream, "\tmoveml %Rsp@+,%0I0x%x\n", mask);
++#endif
++	    }
++          else
++            {
++#ifdef MOTOROLA
++              asm_fprintf (stream, "\tmovm.l -%d(%s),%0I0x%x\n",
++                           offset + fsize,
++                           reg_names[FRAME_POINTER_REGNUM],
++                           mask);
++#else
++              asm_fprintf (stream, "\tmoveml %s@(-%d),%0I0x%x\n",
++                           reg_names[FRAME_POINTER_REGNUM],
++                           offset + fsize, mask);
++#endif
++            }
++      
++      }
++  }
+   if (fmask)
+     {
+       if (big)
+@@ -718,7 +858,7 @@
+     }
+   if (fpoffset != 0)
+     for (regno = 55; regno >= 24; regno--)
+-      if (regs_ever_live[regno] && ! call_used_regs[regno])
++      if (MUST_SAVE_REGISTER(regno))
+         {
+ 	  if (big)
+ 	    {
+@@ -827,11 +967,18 @@
+ 	  asm_fprintf (stream, "\taddl %0I%d,%Rsp\n", fsize + 4);
+ #endif
+ 	}
+-    }
+-  if (current_function_pops_args)
+-    asm_fprintf (stream, "\trtd %0I%d\n", current_function_pops_args);
++  }
++  if (interrupt_handler)
++  {
++    fprintf (stream, "\trte\n");
++  }
+   else
+-    fprintf (stream, "\trts\n");
++  {
++    if (current_function_pops_args)
++      asm_fprintf (stream, "\trtd %0I%d\n", current_function_pops_args);
++    else
++      fprintf (stream, "\trts\n");
++  }
+ }
+ 
+ /* Similar to general_operand, but exclude stack_pointer_rtx.  */
+@@ -1334,7 +1481,7 @@
+ 			     gen_rtx_PLUS (Pmode,
+ 					   pic_offset_table_rtx, orig));
+       current_function_uses_pic_offset_table = 1;
+-      if (reload_in_progress)
++      if (! TARGET_SEP_DATA && reload_in_progress)
+ 	regs_ever_live[PIC_OFFSET_TABLE_REGNUM] = 1;
+       RTX_UNCHANGING_P (pic_ref) = 1;
+       emit_move_insn (reg, pic_ref);
+@@ -1424,7 +1571,7 @@
+       /* Constants easily generated by moveq + not.b/not.w/neg.w/swap  */
+         return 1;
+       case MOVL :
+-	return 2;
++	return TARGET_5200 ? 1 : 2;
+       default :
+         abort ();
+     }
+@@ -3397,3 +3544,76 @@
+     }
+   return "eor%.l %2,%0";
+ }
++
++/* Return nonzero if ATTR is a valid attribute for DECL.
++   ATTRIBUTES are any existing attributes and ARGS are the arguments
++   supplied with ATTR.
++
++   Supported attributes:
++
++   interrupt -- specifies this function is an interrupt handler.
++*/
++
++int
++m68k_valid_machine_decl_attribute (decl, attributes, attr, args)
++     tree decl;
++     tree attributes;
++     tree attr;
++     tree args;
++{
++  if (args != NULL_TREE)
++    return 0;
++
++  if (is_attribute_p ("interrupt", attr))
++    return TREE_CODE (decl) == FUNCTION_DECL;
++
++  return 0;
++}
++
++/* Return nonzero if FUNC is an interrupt function as specified by the
++   "interrupt" attribute.  */
++
++int
++m68k_interrupt_function_p(func)
++     tree func;
++{
++  tree a;
++
++  if (TREE_CODE (func) != FUNCTION_DECL)
++    return 0;
++
++  a = lookup_attribute ("interrupt", DECL_MACHINE_ATTRIBUTES (func));
++  return (a != NULL_TREE);
++}
++
++/* Return the initial difference between the
++   frame pointer reg contents and the stack pointer reg contents,
++   as of the start of the function body.  This depends on the layout
++   of the fixed parts of the stack frame and on how registers are saved.
++
++   On the 68k, if we have a frame, we must add one word to its length
++   to allow for the place that a6 is stored when we do have a frame pointer.
++   Otherwise, we would need to compute the offset from the frame pointer
++   of a local variable as a function of frame_pointer_needed, which
++   is hard.  */
++
++int
++initial_fp_offset(void) {
++  int interrupt_handler = m68k_interrupt_function_p (current_function_decl);
++  int regno;
++  int offset = -4;
++
++  for (regno = 16; regno < FIRST_PSEUDO_REGISTER; regno++)
++    if (MUST_SAVE_REGISTER(regno))
++      offset += 12;
++  for (regno = 0; regno < 16; regno++)
++    if (MUST_SAVE_REGISTER(regno))
++      offset += 4;
++  if (flag_pic && ! TARGET_SEP_DATA &&
++		  (current_function_uses_pic_offset_table ||
++		   ( ! current_function_is_leaf && TARGET_ID_SHARED_LIBRARY)))
++    offset += 4;
++  return (offset + ((get_frame_size () + 3) & -4)
++	     + (get_frame_size () == 0 ? 0 : 4));
++}
++
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/m68k.h gcc-2.95.3/gcc/config/m68k/m68k.h
+--- gcc-2.95.3-orig/gcc/config/m68k/m68k.h	Fri Jan 26 00:03:34 2001
++++ gcc-2.95.3/gcc/config/m68k/m68k.h	Tue Feb 26 06:52:47 2002
+@@ -120,6 +120,29 @@
+ #define MASK_ALIGN_INT	4096
+ #define TARGET_ALIGN_INT (target_flags & MASK_ALIGN_INT)
+ 
++/* Support A5 relative data seperate from text.
++ * This option implies -fPIC, however it inhibits the generation of the
++ * A5 save/restore in functions and the loading of a5 with a got pointer.
++ */
++#define MASK_SEP_DATA	8192
++#define TARGET_SEP_DATA (target_flags & MASK_SEP_DATA)
++
++/* Compile for ColdFire with hardware divide (5307 etc.) */
++#define MASK_CF_HWDIV	16384
++#define TARGET_CF_HWDIV	(target_flags & MASK_CF_HWDIV)
++
++#define TARGET_5200_HWDIV (TARGET_5200 && TARGET_CF_HWDIV)
++
++/* Compile for mcf5300 */
++#define MASK_5300	32768
++#define TARGET_5300 (target_flags & MASK_5300)
++
++/* Compile using library ID based shared libraries.
++ * Set a specific ID using the -mshared-library-id=xxx option.
++ */
++#define MASK_ID_SHARED_LIBRARY	65536
++#define TARGET_ID_SHARED_LIBRARY	(target_flags & MASK_ID_SHARED_LIBRARY)
++
+ /* Compile for a CPU32 */
+ 	/* A 68020 without bitfields is a good heuristic for a CPU32 */
+ #define TARGET_CPU32	(TARGET_68020 && !TARGET_BITFIELD)
+@@ -170,6 +193,9 @@
+     { "5200", - (MASK_68060|MASK_68040|MASK_68040_ONLY|MASK_68020	\
+ 		|MASK_BITFIELD|MASK_68881)},				\
+     { "5200", (MASK_5200)},						\
++    { "5307", - (MASK_68060|MASK_68040|MASK_68040_ONLY|MASK_68020	\
++		|MASK_BITFIELD|MASK_68881)},				\
++    { "5307", (MASK_5200|MASK_5300|MASK_CF_HWDIV)},			\
+     { "68851", 0},							\
+     { "no-68851", 0},							\
+     { "68302", - (MASK_5200|MASK_68060|MASK_68040|MASK_68040_ONLY	\
+@@ -182,6 +208,14 @@
+     { "cpu32", MASK_68020},						\
+     { "align-int", MASK_ALIGN_INT },					\
+     { "no-align-int", -MASK_ALIGN_INT },				\
++    { "sep-data", MASK_SEP_DATA, "Enable separate data segment" },	\
++    { "no-sep-data", -MASK_SEP_DATA, "Disable separate data segment" },	\
++    { "id-shared-library", MASK_ID_SHARED_LIBRARY, "Enable ID based shared library" },	\
++    { "no-id-shared-library", -MASK_ID_SHARED_LIBRARY, "Disable ID based shared library" },	\
++    { "hwdiv", MASK_CF_HWDIV },						\
++    { "no-hwdiv", -MASK_CF_HWDIV },					\
++    { "mac", 0 },							\
++    { "no-mac", 0 },							\
+     SUBTARGET_SWITCHES							\
+     { "", TARGET_DEFAULT}}
+ /* TARGET_DEFAULT is defined in sun*.h and isi.h, etc.  */
+@@ -199,6 +233,7 @@
+ { { "align-loops=",	&m68k_align_loops_string },			\
+   { "align-jumps=",	&m68k_align_jumps_string },			\
+   { "align-functions=",	&m68k_align_funcs_string },			\
++  { "shared-library-id=",	&m68k_library_id_string },		\
+   SUBTARGET_OPTIONS							\
+ }
+ 
+@@ -214,8 +249,9 @@
+ #define OVERRIDE_OPTIONS		\
+ {					\
+   override_options();			\
+-  if (! TARGET_68020 && flag_pic == 2)	\
+-    error("-fPIC is not currently supported on the 68000 or 68010\n");	\
++  if (flag_pic && (! optimize_size || TARGET_68020) && \
++  		! TARGET_ID_SHARED_LIBRARY )	\
++  	flag_no_function_cse = 1; 	\
+   SUBTARGET_OVERRIDE_OPTIONS;		\
+ }
+ 
+@@ -295,6 +331,9 @@
+ /* Maximum power of 2 that code can be aligned to.  */
+ #define MAX_CODE_ALIGN	2			/* 4 byte alignment */
+ 
++/* Maximum number of library ids we permit */
++#define MAX_LIBRARY_ID 255
++
+ /* Align loop starts for optimal branching.  */
+ #define LOOP_ALIGN(LABEL) (m68k_align_loops)
+ 
+@@ -414,6 +453,12 @@
+ 
+ #endif /* defined SUPPORT_SUN_FPA */
+ 
++/* A C expression whose value is nonzero if IDENTIFIER with arguments ARGS
++   is a valid machine specific attribute for DECL.
++   The attributes in ATTRIBUTES have previously been assigned to DECL.  */
++extern int m68k_valid_machine_decl_attribute ();
++#define VALID_MACHINE_DECL_ATTRIBUTE(DECL, ATTRIBUTES, IDENTIFIER, ARGS) \
++m68k_valid_machine_decl_attribute (DECL, ATTRIBUTES, IDENTIFIER, ARGS)
+ 
+ /* Make sure everything's fine if we *don't* have a given processor.
+    This assumes that putting a register in fixed_regs will keep the
+@@ -1178,7 +1223,7 @@
+ /* Determine if the epilogue should be output as RTL.
+    You should override this if you define FUNCTION_EXTRA_EPILOGUE.  */
+ #define USE_RETURN_INSN use_return_insn ()
+-
++ 
+ /* Store in the variable DEPTH the initial difference between the
+    frame pointer reg contents and the stack pointer reg contents,
+    as of the start of the function body.  This depends on the layout
+@@ -1190,20 +1235,8 @@
+    of a local variable as a function of frame_pointer_needed, which
+    is hard.  */
+ 
+-#define INITIAL_FRAME_POINTER_OFFSET(DEPTH)			\
+-{ int regno;							\
+-  int offset = -4;						\
+-  for (regno = 16; regno < FIRST_PSEUDO_REGISTER; regno++)	\
+-    if (regs_ever_live[regno] && ! call_used_regs[regno])	\
+-      offset += 12;						\
+-  for (regno = 0; regno < 16; regno++)				\
+-    if (regs_ever_live[regno] && ! call_used_regs[regno])	\
+-      offset += 4;						\
+-  if (flag_pic && current_function_uses_pic_offset_table)	\
+-    offset += 4;						\
+-  (DEPTH) = (offset + ((get_frame_size () + 3) & -4)		\
+-	     + (get_frame_size () == 0 ? 0 : 4));		\
+-}
++#define INITIAL_FRAME_POINTER_OFFSET(DEPTH)	(DEPTH) = initial_fp_offset();
++
+ 
+ /* Output assembler code for a block containing the constant parts
+    of a trampoline, leaving space for the variable parts.  */
+@@ -1640,9 +1673,10 @@
+    relative to an average of the time for add and the time for shift,
+    taking away a little more because sometimes move insns are needed.  */
+ /* div?.w is relatively cheaper on 68000 counted in COSTS_N_INSNS terms.  */
+-#define MULL_COST (TARGET_68060 ? 2 : TARGET_68040 ? 5 : 13)
+-#define MULW_COST (TARGET_68060 ? 2 : TARGET_68040 ? 3 : TARGET_68020 ? 8 : 5)
+-#define DIVW_COST (TARGET_68020 ? 27 : 12)
++#define MULL_COST (TARGET_68060 ? 2 : TARGET_68040 ? 5 : TARGET_5300 ? 3 : TARGET_5200 ? 10 : 13)
++#define MULW_COST (TARGET_68060 ? 2 : TARGET_68040 ? 3 : TARGET_68020 ? 8 : \
++			TARGET_5300 ? 2 : 5)
++#define DIVW_COST (TARGET_68020 ? 27 : TARGET_CF_HWDIV ? 11 : 12)
+ 
+ #define RTX_COSTS(X,CODE,OUTER_CODE)				\
+   case PLUS:							\
+@@ -1654,15 +1688,19 @@
+ 	&& GET_CODE (XEXP (XEXP (X, 0), 1)) == CONST_INT	\
+ 	&& (INTVAL (XEXP (XEXP (X, 0), 1)) == 2			\
+ 	    || INTVAL (XEXP (XEXP (X, 0), 1)) == 4		\
+-	    || INTVAL (XEXP (XEXP (X, 0), 1)) == 8))		\
+-      return COSTS_N_INSNS (3);	 /* lea an@(dx:l:i),am */	\
++	    || INTVAL (XEXP (XEXP (X, 0), 1)) == 8)) {		\
++      if (TARGET_5200)						\
++      	return COSTS_N_INSNS (2);				\
++      else							\
++	return COSTS_N_INSNS (3);	 /* lea an@(dx:l:i),am */	\
++    }								\
+     break;							\
+   case ASHIFT:							\
+   case ASHIFTRT:						\
+   case LSHIFTRT:						\
+     if (TARGET_68060)						\
+       return COSTS_N_INSNS(1);					\
+-    if (! TARGET_68020)							\
++    if (! TARGET_68020 && ! TARGET_5200)				\
+       {									\
+ 	if (GET_CODE (XEXP (X, 1)) == CONST_INT)			\
+ 	  {								\
+@@ -1680,8 +1718,12 @@
+       return COSTS_N_INSNS (2);	 /* clrw;swap */		\
+     if (GET_CODE (XEXP (X, 1)) == CONST_INT			\
+ 	&& !(INTVAL (XEXP (X, 1)) > 0				\
+-	     && INTVAL (XEXP (X, 1)) <= 8))			\
+-      return COSTS_N_INSNS (3);	 /* lsr #i,dn */		\
++	     && INTVAL (XEXP (X, 1)) <= 8)) {			\
++      if (TARGET_5200)						\
++        return COSTS_N_INSNS(1);				\
++      else							\
++	return COSTS_N_INSNS (3);	 /* lsr #i,dn */	\
++      }								\
+     break;							\
+   case MULT:							\
+     if ((GET_CODE (XEXP (X, 0)) == ZERO_EXTEND			\
+@@ -1698,6 +1740,8 @@
+   case UMOD:							\
+     if (GET_MODE (X) == QImode || GET_MODE (X) == HImode)	\
+       return COSTS_N_INSNS (DIVW_COST); /* div.w */		\
++    if (TARGET_CF_HWDIV)						\
++      return COSTS_N_INSNS(18);					\
+     return COSTS_N_INSNS (43);	 /* div.l */
+ 
+ /* Tell final.c how to eliminate redundant test instructions.  */
+@@ -2083,6 +2127,11 @@
+ 
+ #define PRINT_OPERAND_ADDRESS(FILE, ADDR) print_operand_address (FILE, ADDR)
+ 
++/* The maximum alignment which the object file format can support. */
++#undef MAX_OFILE_ALIGNMENT
++#define MAX_OFILE_ALIGNMENT 128
++
++
+ /* Define functions defined in aux-output.c and used in templates.  */
+ 
+ extern char *output_move_const_into_data_reg ();
+@@ -2115,6 +2164,8 @@
+ extern const char *m68k_align_loops_string;
+ extern const char *m68k_align_jumps_string;
+ extern const char *m68k_align_funcs_string;
++extern const char *m68k_library_id_string;
++extern int m68k_library_id;
+ extern int m68k_align_loops;
+ extern int m68k_align_jumps;
+ extern int m68k_align_funcs;
+@@ -2133,6 +2184,7 @@
+ extern void notice_update_cc ();
+ extern void finalize_pic ();
+ extern void override_options ();
++extern int initial_fp_offset ();
+ 
+ 
+ /*
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/m68k.md gcc-2.95.3/gcc/config/m68k/m68k.md
+--- gcc-2.95.3-orig/gcc/config/m68k/m68k.md	Thu Aug  5 16:22:05 1999
++++ gcc-2.95.3/gcc/config/m68k/m68k.md	Tue Feb 26 06:52:47 2002
+@@ -3516,13 +3516,23 @@
+ 
+ ;; Remainder instructions.
+ 
+-(define_insn "divmodsi4"
++(define_expand "divmodsi4"
++  [(parallel
++   [(set (match_operand:SI 0 "general_operand" "")
++ 	(div:SI (match_operand:SI 1 "general_operand" "")
++ 		(match_operand:SI 2 "general_operand" "")))
++    (set (match_operand:SI 3 "general_operand" "")
++ 	(mod:SI (match_dup 1) (match_dup 2)))])]
++  "TARGET_68020 || TARGET_5200_HWDIV"
++  "")
++
++(define_insn ""
+   [(set (match_operand:SI 0 "general_operand" "=d")
+ 	(div:SI (match_operand:SI 1 "general_operand" "0")
+ 		(match_operand:SI 2 "general_operand" "dmsK")))
+    (set (match_operand:SI 3 "general_operand" "=d")
+ 	(mod:SI (match_dup 1) (match_dup 2)))]
+-  "TARGET_68020 && !TARGET_5200"
++  "TARGET_68020"
+   "*
+ {
+   if (find_reg_note (insn, REG_UNUSED, operands[3]))
+@@ -3531,13 +3541,40 @@
+     return \"divsl%.l %2,%3:%0\";
+ }")
+ 
+-(define_insn "udivmodsi4"
++(define_insn ""
++  [(set (match_operand:SI 0 "general_operand" "=d")
++	(div:SI (match_operand:SI 1 "general_operand" "0")
++		(match_operand:SI 2 "general_operand" "dQ")))
++   (set (match_operand:SI 3 "general_operand" "=&d")
++	(mod:SI (match_dup 1) (match_dup 2)))]
++  "TARGET_5200_HWDIV"
++  "*
++{
++  if (find_reg_note (insn, REG_UNUSED, operands[3]))
++    return \"divs%.l %2,%0\";
++  else if (find_reg_note (insn, REG_UNUSED, operands[0]))
++    return \"rems%.l %2,%3:%0\";
++  else
++    return \"rems%.l %2,%3:%0\;divs%.l %2,%0\";
++}")
++
++(define_expand "udivmodsi4"
++  [(parallel
++   [(set (match_operand:SI 0 "general_operand" "")
++	(udiv:SI (match_operand:SI 1 "general_operand" "")
++		 (match_operand:SI 2 "general_operand" "")))
++   (set (match_operand:SI 3 "general_operand" "")
++	(umod:SI (match_dup 1) (match_dup 2)))])]
++  "TARGET_68020 || TARGET_5200_HWDIV"
++  "")
++
++(define_insn ""
+   [(set (match_operand:SI 0 "general_operand" "=d")
+ 	(udiv:SI (match_operand:SI 1 "general_operand" "0")
+ 		 (match_operand:SI 2 "general_operand" "dmsK")))
+    (set (match_operand:SI 3 "general_operand" "=d")
+ 	(umod:SI (match_dup 1) (match_dup 2)))]
+-  "TARGET_68020 && !TARGET_5200"
++  "TARGET_68020"
+   "*
+ {
+   if (find_reg_note (insn, REG_UNUSED, operands[3]))
+@@ -3546,13 +3583,30 @@
+     return \"divul%.l %2,%3:%0\";
+ }")
+ 
++(define_insn ""
++  [(set (match_operand:SI 0 "general_operand" "=d")
++	(udiv:SI (match_operand:SI 1 "general_operand" "0")
++		 (match_operand:SI 2 "general_operand" "dQ")))
++   (set (match_operand:SI 3 "general_operand" "=&d")
++	(umod:SI (match_dup 1) (match_dup 2)))]
++  "TARGET_5200_HWDIV"
++  "*
++{
++  if (find_reg_note (insn, REG_UNUSED, operands[3]))
++    return \"divu%.l %2,%0\";
++  else if (find_reg_note (insn, REG_UNUSED, operands[0]))
++    return \"remu%.l %2,%3:%0\";
++  else
++    return \"remu%.l %2,%3:%0\;divu%.l %2,%0\";
++}")
++
+ (define_insn "divmodhi4"
+   [(set (match_operand:HI 0 "general_operand" "=d")
+ 	(div:HI (match_operand:HI 1 "general_operand" "0")
+ 		(match_operand:HI 2 "general_operand" "dmsK")))
+    (set (match_operand:HI 3 "general_operand" "=d")
+ 	(mod:HI (match_dup 1) (match_dup 2)))]
+-  "!TARGET_5200"
++  "!TARGET_5200 || TARGET_5200_HWDIV"
+   "*
+ {
+ #ifdef MOTOROLA
+@@ -3575,7 +3629,7 @@
+ 		 (match_operand:HI 2 "general_operand" "dmsK")))
+    (set (match_operand:HI 3 "general_operand" "=d")
+ 	(umod:HI (match_dup 1) (match_dup 2)))]
+-  "!TARGET_5200"
++  "!TARGET_5200 || TARGET_5200_HWDIV"
+   "*
+ {
+ #ifdef MOTOROLA
+@@ -3591,6 +3645,8 @@
+   else
+     return \"\";
+ }")
++
++
+ 
+ ;; logical-and instructions
+ 
+@@ -6830,7 +6886,19 @@
+ #ifdef USE_GAS
+     return \"bsr.l %0@PLTPC\";
+ #else
+-    return \"bsr %0@PLTPC\";
++    /* We output a bsr instruction if we've using -fpic or we're building for
++     * a target that supports long branches.  If we're building -fPIC on the
++     * 68000. 68010 or coldfire we're generate one of two sequences
++     * a shorter one that uses a GOT entry or a longer one that doesn't.
++     * We'll use the -Os commandline flag to decide which to generate.
++     * Both sequences take the same time to execute on the coldfire.
++     */
++    if (flag_pic == 1 || TARGET_68020)
++      return \"bsr %0@PLTPC\";
++    else if (optimize_size || TARGET_ID_SHARED_LIBRARY)
++      return \"move.l %0@GOT(%%a5), %%a1\\n\\tjsr (%%a1)\";
++    else
++      return \"lea %0-.-8,%%a1\;jsr 0(%%pc,%%a1)\";
+ #endif
+ #endif
+ #else
+@@ -6894,7 +6962,18 @@
+ #ifdef USE_GAS
+       return \"bsr.l %1@PLTPC\";
+ #else
++    /* We output a bsr instruction if we've using -fpic or we're building for
++     * a target that supports long branches.  If we're building -fPIC on the
++     * 68000. 68010 or coldfire we're generate one of two sequences
++     * a shorter one that uses a GOT entry or a longer one that doesn't.
++     * We'll use the -Os commandline flag to decide which to generate.
++     */
++    if (flag_pic == 1 || TARGET_68020)
+       return \"bsr %1@PLTPC\";
++    else if (optimize_size || TARGET_ID_SHARED_LIBRARY)
++      return \"move.l %1@GOT(%%a5), %%a1\\n\\tjsr (%%a1)\";
++    else
++      return \"lea %1-.-8,%%a1\;jsr 0(%%pc,%%a1)\";
+ #endif
+ #endif
+ #else
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/m68kelf.h gcc-2.95.3/gcc/config/m68k/m68kelf.h
+--- gcc-2.95.3-orig/gcc/config/m68k/m68kelf.h	Fri Feb 19 02:00:12 1999
++++ gcc-2.95.3/gcc/config/m68k/m68kelf.h	Tue Feb 26 06:52:47 2002
+@@ -255,12 +255,17 @@
+    the PLT entry for `foo'. Doing function cse will cause the address of `foo'
+    to be loaded into a register, which is exactly what we want to avoid when
+    we are doing PIC on svr4 m68k. */
++/* We allow function cse if we're optimising for size not on the 68020 or
++ * above since all function calls are going via the got anyway so loading the
++ * address isn't a problem.
++ */
+ #undef OVERRIDE_OPTIONS
+ #define OVERRIDE_OPTIONS		\
+ {					\
+-  if (flag_pic) flag_no_function_cse = 1; \
+-  if (! TARGET_68020 && flag_pic == 2)	\
+-    error("-fPIC is not currently supported on the 68000 or 68010\n");	\
++  override_options();			\
++  if (flag_pic && (! optimize_size || TARGET_68020) && \
++  		! TARGET_ID_SHARED_LIBRARY )	\
++  	flag_no_function_cse = 1; 	\
+ }
+ /* end of stuff from m68kv4.h */
+ 
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/t-m68kbare gcc-2.95.3/gcc/config/m68k/t-m68kbare
+--- gcc-2.95.3-orig/gcc/config/m68k/t-m68kbare	Thu Dec 17 07:07:29 1998
++++ gcc-2.95.3/gcc/config/m68k/t-m68kbare	Tue Feb 26 06:52:47 2002
+@@ -15,10 +15,10 @@
+ 	echo '#define EXTFLOAT' > xfgnulib.c
+ 	cat $(srcdir)/config/m68k/fpgnulib.c >> xfgnulib.c
+ 
+-MULTILIB_OPTIONS = m68000/m68020/m5200/mcpu32 m68881/msoft-float
++MULTILIB_OPTIONS = m68000/m68020/m5200/mcpu32 m68881/msoft-float/mhwdiv
+ MULTILIB_DIRNAMES =
+ MULTILIB_MATCHES = m68000=mc68000 m68000=m68302 mcpu32=m68332 m68020=mc68020 m68020=m68040 m68020=m68060
+-MULTILIB_EXCEPTIONS = m68000/msoft-float m5200/m68881 m5200/msoft-float mcpu32/m68881 mcpu32/msoft-float
++MULTILIB_EXCEPTIONS = mhwdiv m68000/msoft-float m68000/mhwdiv m68020/mhwdiv m5200/m68881 m5200/msoft-float mcpu32/m68881 mcpu32/msoft-float mcpu32/mhwdiv
+ 
+ LIBGCC = stmp-multilib
+ INSTALL_LIBGCC = install-multilib
+diff -u -r gcc-2.95.3-orig/gcc/config/m68k/t-m68kelf gcc-2.95.3/gcc/config/m68k/t-m68kelf
+--- gcc-2.95.3-orig/gcc/config/m68k/t-m68kelf	Thu Dec 17 07:07:30 1998
++++ gcc-2.95.3/gcc/config/m68k/t-m68kelf	Tue Feb 26 06:52:47 2002
+@@ -15,10 +15,13 @@
+ 	echo '#define EXTFLOAT' > xfgnulib.c
+ 	cat $(srcdir)/config/m68k/fpgnulib.c >> xfgnulib.c
+ 
+-MULTILIB_OPTIONS = m68000/m68020/m5200/mcpu32 m68881/msoft-float
++MULTILIB_OPTIONS = m68000/m68020/m5200/m5307/mcpu32 m68881/msoft-float msep-data/mid-shared-library
+ MULTILIB_DIRNAMES =
+ MULTILIB_MATCHES = m68000=mc68000 m68000=m68302 mcpu32=m68332 m68020=mc68020 m68020=m68040 m68020=m68060
+-MULTILIB_EXCEPTIONS = m68000/msoft-float m5200/m68881 m5200/msoft-float mcpu32/m68881 mcpu32/msoft-float
++MULTILIB_EXCEPTIONS = m68000/msoft-float* m5200/m68881* m5200/msoft-float* mcpu32/m68881* mcpu32/msoft-float* \
++		msep-data msoft-float/msep-data m5307/m68881* m5307/msoft-float* \
++		mid-shared-library msoft-float/mid-shared-library
++# MULTILIB_EXTRA_OPTS = 
+ 
+ LIBGCC = stmp-multilib
+ INSTALL_LIBGCC = install-multilib
+diff -u -r gcc-2.95.3-orig/gcc/invoke.texi gcc-2.95.3/gcc/invoke.texi
+--- gcc-2.95.3-orig/gcc/invoke.texi	Fri Jan 26 00:03:17 2001
++++ gcc-2.95.3/gcc/invoke.texi	Tue Feb 26 06:52:47 2002
+@@ -214,7 +214,8 @@
+ -m68000  -m68020  -m68020-40  -m68020-60  -m68030  -m68040
+ -m68060  -mcpu32 -m5200  -m68881  -mbitfield  -mc68000  -mc68020  
+ -mfpa -mnobitfield  -mrtd  -mshort  -msoft-float  
+--malign-int
++-malign-int  -msep-data  -mno-sep-data -mmac -mno-mac -mhwdiv -mno-hwdiv
++-mshared-library-id=n -mid-shared-library -mno-id-shared-library
+ 
+ @emph{VAX Options}
+ -mg  -mgnu  -munix
+@@ -3226,7 +3227,7 @@
+ when the compiler is configured for 520X-based systems.
+ 
+ Use this option for microcontroller with a 5200 core, including 
+-the MCF5202, MCF5203, MCF5204 and MCF5202.
++the MCF5202, MCF5204, MCF5206e and MCF5307.
+ 
+ 
+ @item -m68020-40
+@@ -3299,6 +3300,44 @@
+ @strong{Warning:} if you use the @samp{-malign-int} switch, GCC will
+ align structures containing the above types  differently than
+ most published application binary interface specifications for the m68k.
++
++@item -mhwdiv
++@itemx -mno-hwdiv
++Control the generation of output containing divide instructions that 
++will only work on ColdFire processors with a hardware divide unit. This
++option is only available when compiling for the ColdFire. The default is
++@samp{-mnohwdiv}.
++
++@item -mmac
++@itemx -mno-mac
++Control the availability of ColdFire Multiply and ACcumulate instructions.
++This does not affect the code generated only the availablity of the 
++instructions to assembler contained within the C. The default is
++@samp{-mnomac}.
++
++@item -mno-sep-data
++Generate code that assumes that the data segment follows the text segment.
++This is the default.
++
++@item -msep-data
++Generate code that allows the data segment to be located in a different
++area of memory from the text segment.  This allows for execute in place in
++an environment without virtual memory management.  This option implies -fPIC.
++
++@item -mid-shared-library
++Generate code that supports shared libraries via the library ID method.
++This allows for execute in place and shared libraries in an environment
++without virtual memory management.  This option implies -fPIC.
++
++@item -mno-id-shared-library
++Generate code that doesn't assume ID based shared libraries are being used.
++This is the default.
++
++@item -mshared-library-id=n
++Specified the identification number of the ID based shared library being
++compiled.  Specifying a value of 0 will generate more compact code, specifying
++other values will force the allocation of that number to the current
++library but is no more space or time efficient than omitting this option.
+ 
+ @end table
+ 
+diff -u -r gcc-2.95.3-orig/gcc/longlong.h gcc-2.95.3/gcc/longlong.h
+--- gcc-2.95.3-orig/gcc/longlong.h	Thu Jan  7 06:44:39 1999
++++ gcc-2.95.3/gcc/longlong.h	Tue Feb 26 06:52:47 2002
+@@ -514,8 +514,43 @@
+ 	     "dmi" ((USItype) (d)))
+ 
+ #else /* not mc68020 */
+-#if !defined(__mcf5200__)
+ /* %/ inserts REGISTER_PREFIX, %# inserts IMMEDIATE_PREFIX.  */
++#if defined(__mcf5200__)
++#define umul_ppmm(xh, xl, a, b) \
++  __asm__ ("| Inlined umul_ppmm
++	move%.l	%2,%/d0
++	move%.l	%3,%/d1
++	move%.l	%/d0,%/d2
++	swap	%/d0
++	move%.l	%/d1,%/d3
++	swap	%/d1
++	move%.w	%/d2,%/d4
++	mulu	%/d3,%/d4
++	mulu	%/d1,%/d2
++	mulu	%/d0,%/d3
++	mulu	%/d0,%/d1
++	move%.l	%/d4,%/d0
++	clr%.w	%/d0
++	swap	%/d0
++	add%.l	%/d0,%/d2
++	add%.l	%/d3,%/d2
++	jcc	1f
++	add%.l	%#65536,%/d1
++1:	swap	%/d2
++	moveq	%#0,%/d0
++	move%.w	%/d2,%/d0
++	move%.w	%/d4,%/d2
++	move%.l	%/d2,%1
++	add%.l	%/d1,%/d0
++	move%.l	%/d0,%0"						\
++	   : "=g" ((USItype) (xh)),					\
++	     "=g" ((USItype) (xl))					\
++	   : "g" ((USItype) (a)),					\
++	     "g" ((USItype) (b))					\
++	   : "d0", "d1", "d2", "d3", "d4")
++#define UMUL_TIME 100
++#define UDIV_TIME 400
++#else /* not mcf5200 */
+ #define umul_ppmm(xh, xl, a, b) \
+   __asm__ ("| Inlined umul_ppmm
+ 	move%.l	%2,%/d0
+diff -u -r gcc-2.95.3-orig/gcc/version.c gcc-2.95.3/gcc/version.c
+--- gcc-2.95.3-orig/gcc/version.c	Fri Mar 16 22:52:12 2001
++++ gcc-2.95.3/gcc/version.c	Tue Feb 26 06:52:47 2002
+@@ -1 +1 @@
+-char *version_string = "2.95.3 20010315 (release)";
++char *version_string = "2.95.3 20010315 (release)(ColdFire patches - 20010318 from http://fiddes.net/coldfire/)(uClinux XIP and shared lib patches from http://www.snapgear.com/)";

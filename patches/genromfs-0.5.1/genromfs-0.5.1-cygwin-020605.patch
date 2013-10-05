@@ -1,0 +1,27 @@
+#
+# This patch can be found at http://www.uclinux.org/pub/uClinux/m68k-elf-tools/
+#
+diff -r -u genromfs-0.5.1/Makefile genromfs-0.5.1-new/Makefile
+--- genromfs-0.5.1/Makefile	2002-01-22 10:12:02.000000000 +0100
++++ genromfs-0.5.1-new/Makefile	2002-06-05 09:11:04.000000000 +0200
+@@ -26,7 +26,7 @@
+ 	$(CC) $(CFLAGS) $< -c -o $@
+ 
+ clean:
+-	rm -f genromfs *.o
++	rm -f genromfs genromfs.exe *.o
+ 
+ distclean: clean
+ 	rm -rf $(DISTDIR) $(DISTDIR).tar.gz
+diff -r -u genromfs-0.5.1/genromfs.c genromfs-0.5.1-new/genromfs.c
+--- genromfs-0.5.1/genromfs.c	2002-01-22 10:12:02.000000000 +0100
++++ genromfs-0.5.1-new/genromfs.c	2002-06-05 09:03:32.000000000 +0200
+@@ -71,7 +71,7 @@
+ #include <netinet/in.h>	/* Consts & structs defined by the internet system */
+ 
+ /* good old times without autoconf... */
+-#if defined(linux) || defined(sun)
++#if defined(linux) || defined(sun) || defined(__CYGWIN__)
+ #include <sys/sysmacros.h>
+ #endif
+ 

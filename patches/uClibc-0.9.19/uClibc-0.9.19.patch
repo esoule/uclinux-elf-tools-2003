@@ -1,0 +1,494 @@
+Index: uClibc/Rules.mak
+diff -c uClibc/Rules.mak:1.1.1.10 uClibc/Rules.mak:1.15
+*** uClibc/Rules.mak:1.1.1.10	Tue Mar  4 21:05:04 2003
+--- uClibc/Rules.mak	Mon Mar 10 15:37:16 2003
+***************
+*** 41,47 ****
+  AR= $(CROSS)ar
+  LD= $(CROSS)ld
+  NM= $(CROSS)nm
+! STRIPTOOL= $(CROSS)strip
+  
+  # Select the compiler needed to build binaries for your development system
+  HOSTCC=gcc
+--- 41,47 ----
+  AR= $(CROSS)ar
+  LD= $(CROSS)ld
+  NM= $(CROSS)nm
+! STRIPTOOL= : $(CROSS)strip
+  
+  # Select the compiler needed to build binaries for your development system
+  HOSTCC=gcc
+***************
+*** 175,186 ****
+      LDFLAGS:= $(CPU_LDFLAGS-y) -shared --warn-common --warn-once -z combreloc
+      STRIPTOOL:= true -Since_we_are_debugging
+  else
+!     LDFLAGS := $(CPU_LDFLAGS-y) -s -shared --warn-common --warn-once -z combreloc
+  endif
+  
+  # Sigh, some stupid versions of gcc can't seem to cope with '-iwithprefix include'
+  #CFLAGS+=-iwithprefix include
+! CFLAGS+=$(shell $(CC) -print-search-dirs | sed -ne "s/install: *\(.*\)/-I\1include/gp")
+  
+  ifneq ($(DOASSERTS),y)
+      CFLAGS += -DNDEBUG
+--- 175,186 ----
+      LDFLAGS:= $(CPU_LDFLAGS-y) -shared --warn-common --warn-once -z combreloc
+      STRIPTOOL:= true -Since_we_are_debugging
+  else
+!     LDFLAGS := $(CPU_LDFLAGS-y) -shared --warn-common --warn-once -z combreloc
+  endif
+  
+  # Sigh, some stupid versions of gcc can't seem to cope with '-iwithprefix include'
+  #CFLAGS+=-iwithprefix include
+! CFLAGS+=$(shell ($(CC) -print-search-dirs || echo) | sed -ne "s/install: *\(.*\)/-I\1include/gp")
+  
+  ifneq ($(DOASSERTS),y)
+      CFLAGS += -DNDEBUG
+***************
+*** 212,218 ****
+  endif
+  
+  LIBGCC_CFLAGS ?= $(CFLAGS) $(CPU_CFLAGS-y)
+! LIBGCC:=$(shell $(CC) $(LIBGCC_CFLAGS) -print-libgcc-file-name)
+  LIBGCC_DIR:=$(dir $(LIBGCC))
+  
+  # TARGET_PREFIX is the directory under which which the uClibc runtime
+--- 212,218 ----
+  endif
+  
+  LIBGCC_CFLAGS ?= $(CFLAGS) $(CPU_CFLAGS-y)
+! LIBGCC:=$(shell $(CC) $(LIBGCC_CFLAGS) -print-libgcc-file-name || echo)
+  LIBGCC_DIR:=$(dir $(LIBGCC))
+  
+  # TARGET_PREFIX is the directory under which which the uClibc runtime
+***************
+*** 231,237 ****
+  # uClinux shared lib support
+  #
+  
+! ifdef CONFIG_BINFMT_SHARED_FLAT
+    # For the shared version of this, we specify no stack and its library ID
+    FLTFLAGS += -s 0
+    LIBID=1
+--- 231,237 ----
+  # uClinux shared lib support
+  #
+  
+! ifeq ($(CONFIG_BINFMT_SHARED_FLAT),y)
+    # For the shared version of this, we specify no stack and its library ID
+    FLTFLAGS += -s 0
+    LIBID=1
+Index: uClibc/extra/Configs/Config.m68k
+diff -c uClibc/extra/Configs/Config.m68k:1.1.1.7 uClibc/extra/Configs/Config.m68k:1.8
+*** uClibc/extra/Configs/Config.m68k:1.1.1.7	Wed Dec 18 09:05:08 2002
+--- uClibc/extra/Configs/Config.m68k	Fri Feb 21 15:47:25 2003
+***************
+*** 11,19 ****
+  	bool
+  	default y
+  
+! config ARCH_CFLAGS
+! 	string
+! 	default "-Wa,--bitwise-or -I$(KERNEL_SOURCE)/include"
+  
+  config ARCH_LDFLAGS
+  	string
+--- 11,19 ----
+  	bool
+  	default y
+  
+! # config ARCH_CFLAGS
+! #	string
+! #	default "-Wa,--bitwise-or -I$(KERNEL_SOURCE)/include"
+  
+  config ARCH_LDFLAGS
+  	string
+Index: uClibc/extra/Configs/Config.m68k.default
+diff -c /dev/null uClibc/extra/Configs/Config.m68k.default:1.1
+*** /dev/null	Sat Mar 15 21:44:45 2003
+--- uClibc/extra/Configs/Config.m68k.default	Mon Mar 10 15:36:12 2003
+***************
+*** 0 ****
+--- 1,61 ----
++ #
++ # Automatically generated make config: don't edit
++ #
++ 
++ #
++ # Target Architecture Features and Options
++ #
++ HAVE_ELF=y
++ ARCH_HAS_NO_MMU=y
++ UCLIBC_HAS_FLOATS=y
++ # HAS_FPU is not set
++ UCLIBC_HAS_SOFT_FLOAT=y
++ DO_C99_MATH=y
++ WARNINGS="-Wall"
++ KERNEL_SOURCE="$(ROOTDIR)/$(LINUXDIR)/."
++ UCLIBC_UCLINUX_BROKEN_MUNMAP=y
++ EXCLUDE_BRK=y
++ C_SYMBOL_PREFIX=""
++ HAVE_DOT_CONFIG=y
++ 
++ #
++ # General Library Settings
++ #
++ # DOPIC is not set
++ UCLIBC_CTOR_DTOR=y
++ UCLIBC_HAS_THREADS=y
++ UCLIBC_HAS_LFS=y
++ MALLOC=y
++ # MALLOC_930716 is not set
++ UCLIBC_DYNAMIC_ATEXIT=y
++ # HAS_SHADOW is not set
++ UCLIBC_HAS_REGEX=y
++ UNIX98PTY_ONLY=y
++ ASSUME_DEVPTS=y
++ 
++ #
++ # Networking Support
++ #
++ # UCLIBC_HAS_IPV6 is not set
++ UCLIBC_HAS_RPC=y
++ UCLIBC_HAS_FULL_RPC=y
++ 
++ #
++ # String and Stdio Support
++ #
++ # UCLIBC_HAS_WCHAR is not set
++ # USE_OLD_VFPRINTF is not set
++ 
++ #
++ # Library Installation Options
++ #
++ DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
++ SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
++ DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
++ 
++ #
++ # uClibc hacking options
++ #
++ # DODEBUG is not set
++ # DOASSERTS is not set
++ # UCLIBC_MALLOC_DEBUGGING is not set
+Index: uClibc/extra/scripts/get-needed-libgcc-objects.sh
+diff -c uClibc/extra/scripts/get-needed-libgcc-objects.sh:1.1.1.8 uClibc/extra/scripts/get-needed-libgcc-objects.sh:1.3
+*** uClibc/extra/scripts/get-needed-libgcc-objects.sh:1.1.1.8	Thu Feb 13 10:01:56 2003
+--- uClibc/extra/scripts/get-needed-libgcc-objects.sh	Thu Feb 13 10:12:18 2003
+***************
+*** 18,24 ****
+  echo Finding missing symbols in libc.a ...
+  echo "    partial linking..."
+  rm -f libc.ldr
+! $LD $LDFLAGS -r -o libc.ldr $CRTOBJS --whole-archive ../libc.a
+  
+  if $NM --undefined-only libc.ldr 2>&1 | grep -v "^main$" | grep -v "^_GLOBAL_OFFSET_TABLE_$" | grep -v "_gp_disp" > sym.need ; then
+      EXIT_WITH_ERROR=0
+--- 18,25 ----
+  echo Finding missing symbols in libc.a ...
+  echo "    partial linking..."
+  rm -f libc.ldr
+! _LDFLAGS="`echo $LDFLAGS | sed 's/-shared//g'`"
+! $LD $_LDFLAGS -r -o libc.ldr $CRTOBJS --whole-archive ../libc.a
+  
+  if $NM --undefined-only libc.ldr 2>&1 | grep -v "^main$" | grep -v "^_GLOBAL_OFFSET_TABLE_$" | grep -v "_gp_disp" > sym.need ; then
+      EXIT_WITH_ERROR=0
+***************
+*** 52,58 ****
+  
+  cmp -s obj.need obj.need.0 ; state=$?
+  while [ -s obj.need ] && [ $state -ne 0 ] ; do
+!     (cd tmp-gcc && cat ../obj.need | sort | uniq | xargs $LD $LDFLAGS -r -o ../libgcc.ldr)
+      cp obj.need obj.need.0
+      if $NM --undefined-only libgcc.ldr | grep -v "^_GLOBAL_OFFSET_TABLE_$" > sym.need 2>&1 ; then
+  	for SYM in `cat sym.need | sed -e 's/ U //g'` ; do
+--- 53,59 ----
+  
+  cmp -s obj.need obj.need.0 ; state=$?
+  while [ -s obj.need ] && [ $state -ne 0 ] ; do
+!     (cd tmp-gcc && cat ../obj.need | sort | uniq | xargs $LD $_LDFLAGS -r -o ../libgcc.ldr)
+      cp obj.need obj.need.0
+      if $NM --undefined-only libgcc.ldr | grep -v "^_GLOBAL_OFFSET_TABLE_$" > sym.need 2>&1 ; then
+  	for SYM in `cat sym.need | sed -e 's/ U //g'` ; do
+Index: uClibc/include/paths.h
+diff -c uClibc/include/paths.h:1.1.1.7 uClibc/include/paths.h:1.12
+*** uClibc/include/paths.h:1.1.1.7	Tue Mar  4 21:05:04 2003
+--- uClibc/include/paths.h	Tue Mar  4 21:09:48 2003
+***************
+*** 32,37 ****
+--- 32,39 ----
+  #ifndef _PATHS_H_
+  #define	_PATHS_H_
+  
++ #include <config/autoconf.h>
++ 
+  /* Default search path. */
+  #define	_PATH_DEFPATH	"/usr/bin:/bin"
+  /* All standard utilities path. */
+***************
+*** 75,79 ****
+--- 77,92 ----
+  #define	_PATH_VARDB	"/var/lib/misc/"
+  #define	_PATH_VARRUN	"/var/run/"
+  #define	_PATH_VARTMP	"/var/tmp/"
++ 
++ #ifdef CONFIG_USER_FLATFSD_FLATFSD
++ #undef _PATH_SHADOW
++ #undef _PATH_PASSWD
++ #undef _PATH_GROUP
++ #undef _PATH_TZ
++ #define _PATH_SHADOW	"/etc/config/shadow"
++ #define _PATH_PASSWD	"/etc/config/passwd"
++ #define _PATH_GROUP	"/etc/config/group"
++ #define _PATH_TZ		"/etc/config/TZ"
++ #endif
+  
+  #endif /* !_PATHS_H_ */
+Index: uClibc/libc/misc/assert/__assert.c
+diff -c uClibc/libc/misc/assert/__assert.c:1.1.1.4 uClibc/libc/misc/assert/__assert.c:1.2
+*** uClibc/libc/misc/assert/__assert.c:1.1.1.4	Wed Dec 18 09:05:08 2002
+--- uClibc/libc/misc/assert/__assert.c	Tue Jan 14 09:50:07 2003
+***************
+*** 31,36 ****
+--- 31,37 ----
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <unistd.h>
++ #include <syslog.h>
+  
+  /* Get the prototype from assert.h as a double-check. */
+  #undef NDEBUG
+***************
+*** 42,47 ****
+--- 43,50 ----
+  void __assert(const char *assertion, const char * filename,
+  			  int linenumber, register const char * function)
+  {
++ 	/* Guard against possible asserts in syslog */
++ 	static int syslogging = 0;
+  	fprintf(stderr,
+  #if 0
+  			/* TODO: support program_name like glibc? */
+***************
+*** 55,60 ****
+--- 58,80 ----
+  			((function == NULL) ? "?function?" : function),
+  			assertion
+  			);
++ 	if (!syslogging) {
++ 		syslogging = 1;
++ 		syslog(LOG_ERR,
++ #if 0
++ 				/* TODO: support program_name like glibc? */
++ 				"%s: %s: %d: %s: Assertion `%s' failed.\n", program_name,
++ #else
++ 				"%s: %d: %s: Assertion `%s' failed.\n",
++ #endif
++ 				filename,
++ 				linenumber,
++ 				/* Function name isn't available with some compilers. */
++ 				((function == NULL) ? "?function?" : function),
++ 				assertion
++ 				);
++ 		syslogging = 0;
++ 	} 
+  	abort();
+  }
+  
+Index: uClibc/libc/misc/syslog/syslog.c
+diff -c uClibc/libc/misc/syslog/syslog.c:1.1.1.4 uClibc/libc/misc/syslog/syslog.c:1.3
+*** uClibc/libc/misc/syslog/syslog.c:1.1.1.4	Wed Dec 18 09:05:08 2002
+--- uClibc/libc/misc/syslog/syslog.c	Wed Dec 18 09:29:17 2002
+***************
+*** 180,186 ****
+  	 * safe to test only LogTag and use normal sprintf everywhere else.
+  	 */
+  	(void)time(&now);
+! 	stdp = p = tbuf + sprintf(tbuf, "<%d>%.15s ", pri, ctime(&now) + 4);
+  	if (LogTag) {
+  		if (strlen(LogTag) < sizeof(tbuf) - 64)
+  			p += sprintf(p, "%s", LogTag);
+--- 180,186 ----
+  	 * safe to test only LogTag and use normal sprintf everywhere else.
+  	 */
+  	(void)time(&now);
+! 	stdp = p = tbuf + sprintf(tbuf, "<%d>%.20s ", pri, ctime(&now) + 4);
+  	if (LogTag) {
+  		if (strlen(LogTag) < sizeof(tbuf) - 64)
+  			p += sprintf(p, "%s", LogTag);
+Index: uClibc/libc/misc/time/time.c
+diff -c uClibc/libc/misc/time/time.c:1.1.1.6 uClibc/libc/misc/time/time.c:1.5
+*** uClibc/libc/misc/time/time.c:1.1.1.6	Tue Mar  4 21:05:04 2003
+--- uClibc/libc/misc/time/time.c	Thu Feb 13 10:12:19 2003
+***************
+*** 499,505 ****
+  	register rule_struct *r = _time_tzinfo;
+  	long sec;
+  	int i, isdst, isleap, day, day0, monlen, mday;
+! 	int oday;					/* Note: oday can be uninitialized. */
+  
+  	isdst = 0;
+  	if (r[1].tzname[0] != 0) {
+--- 499,505 ----
+  	register rule_struct *r = _time_tzinfo;
+  	long sec;
+  	int i, isdst, isleap, day, day0, monlen, mday;
+! 	int oday=0;				/* Note: oday can be uninitialized. */
+  
+  	isdst = 0;
+  	if (r[1].tzname[0] != 0) {
+***************
+*** 1817,1823 ****
+  {
+  	register int *p;
+  	time_t t1, t, v;
+! 	int wday;					/* Note: wday can be uninitialized. */
+  
+  	{
+  		register const uint16_t *vp;
+--- 1817,1823 ----
+  {
+  	register int *p;
+  	time_t t1, t, v;
+! 	int wday=0;					/* Note: wday can be uninitialized. */
+  
+  	{
+  		register const uint16_t *vp;
+Index: uClibc/libc/stdio/printf.c
+diff -c uClibc/libc/stdio/printf.c:1.1.1.6 uClibc/libc/stdio/printf.c:1.6
+*** uClibc/libc/stdio/printf.c:1.1.1.6	Thu Feb 13 10:01:57 2003
+--- uClibc/libc/stdio/printf.c	Thu Feb 13 10:12:19 2003
+***************
+*** 763,769 ****
+  	int n;
+  	int argtype[MAX_ARGS_PER_SPEC+2];
+  	int argnumber[3];			/* width, precision, 1st data arg */
+! 	unsigned int conv_num;		/* This does not need to be initialized. */
+  	static const char spec_flags[] = SPEC_FLAGS;
+  	static const char spec_chars[] = SPEC_CHARS;/* TODO: b? */
+  	static const char spec_ranges[] = SPEC_RANGES;
+--- 763,770 ----
+  	int n;
+  	int argtype[MAX_ARGS_PER_SPEC+2];
+  	int argnumber[3];			/* width, precision, 1st data arg */
+! 	//unsigned int conv_num;		/* This does not need to be initialized. */
+! 	unsigned int conv_num = 0;		/* but doing so fixes a GCC warning */
+  	static const char spec_flags[] = SPEC_FLAGS;
+  	static const char spec_chars[] = SPEC_CHARS;/* TODO: b? */
+  	static const char spec_ranges[] = SPEC_RANGES;
+Index: uClibc/libpthread/linuxthreads/pthread.c
+diff -c uClibc/libpthread/linuxthreads/pthread.c:1.1.1.5 uClibc/libpthread/linuxthreads/pthread.c:1.4
+*** uClibc/libpthread/linuxthreads/pthread.c:1.1.1.5	Tue Mar  4 21:05:05 2003
+--- uClibc/libpthread/linuxthreads/pthread.c	Tue Mar  4 21:22:10 2003
+***************
+*** 33,44 ****
+  #include "restart.h"
+  #include "debug.h"      /* added to linuxthreads -StS */
+  
+- 
+  /* Mods for uClibc: Some includes */
+  #include <signal.h>
+  #include <sys/types.h>
+  #include <sys/syscall.h>
+  
+  /* mods for uClibc: getpwd and getpagesize are the syscalls */
+  #define __getpid getpid
+  #define __getpagesize getpagesize
+--- 33,47 ----
+  #include "restart.h"
+  #include "debug.h"      /* added to linuxthreads -StS */
+  
+  /* Mods for uClibc: Some includes */
+  #include <signal.h>
+  #include <sys/types.h>
+  #include <sys/syscall.h>
+  
++ #ifdef arm
++ #undef __NR_rt_sigaction
++ #endif
++ 
+  /* mods for uClibc: getpwd and getpagesize are the syscalls */
+  #define __getpid getpid
+  #define __getpagesize getpagesize
+***************
+*** 216,230 ****
+     platform does not support any real-time signals we will define the
+     values to some unreasonable value which will signal failing of all
+     the functions below.  */
+- #ifndef __NR_rt_sigaction
+- static int current_rtmin = -1;
+- static int current_rtmax = -1;
+- int __pthread_sig_restart = SIGUSR1;
+- int __pthread_sig_cancel = SIGUSR2;
+- int __pthread_sig_debug;
+- #else
+  
+! #if __SIGRTMAX - __SIGRTMIN >= 3
+  static int current_rtmin = __SIGRTMIN + 3;
+  static int current_rtmax = __SIGRTMAX;
+  int __pthread_sig_restart = __SIGRTMIN;
+--- 219,226 ----
+     platform does not support any real-time signals we will define the
+     values to some unreasonable value which will signal failing of all
+     the functions below.  */
+  
+! #if defined(__NR_rt_sigaction) && __SIGRTMAX - __SIGRTMIN >= 3
+  static int current_rtmin = __SIGRTMIN + 3;
+  static int current_rtmax = __SIGRTMAX;
+  int __pthread_sig_restart = __SIGRTMIN;
+***************
+*** 242,248 ****
+  void (*__pthread_restart)(pthread_descr) = __pthread_restart_old;
+  void (*__pthread_suspend)(pthread_descr) = __pthread_suspend_old;
+  int (*__pthread_timedsuspend)(pthread_descr, const struct timespec *) = __pthread_timedsuspend_old;
+- 
+  #endif
+  
+  /* Return number of available real-time signal with highest priority.  */
+--- 238,243 ----
+***************
+*** 267,273 ****
+  	return -1;
+      return high ? current_rtmin++ : current_rtmax--;
+  }
+- #endif
+  
+  /* Initialize the pthread library.
+     Initialization is split in two functions:
+--- 262,267 ----
+***************
+*** 844,850 ****
+  	struct timespec reltime;
+  
+  	/* Compute a time offset relative to now.  */
+! 	__gettimeofday (&now, NULL);
+  	reltime.tv_nsec = abstime->tv_nsec - now.tv_usec * 1000;
+  	reltime.tv_sec = abstime->tv_sec - now.tv_sec;
+  	if (reltime.tv_nsec < 0) {
+--- 838,844 ----
+  	struct timespec reltime;
+  
+  	/* Compute a time offset relative to now.  */
+! 	gettimeofday (&now, NULL);
+  	reltime.tv_nsec = abstime->tv_nsec - now.tv_usec * 1000;
+  	reltime.tv_sec = abstime->tv_sec - now.tv_sec;
+  	if (reltime.tv_nsec < 0) {
+Index: uClibc/libpthread/linuxthreads/restart.h
+diff -c uClibc/libpthread/linuxthreads/restart.h:1.1.1.2 uClibc/libpthread/linuxthreads/restart.h:1.2
+*** uClibc/libpthread/linuxthreads/restart.h:1.1.1.2	Tue Mar  4 21:05:05 2003
+--- uClibc/libpthread/linuxthreads/restart.h	Tue Mar  4 21:22:10 2003
+***************
+*** 15,20 ****
+--- 15,24 ----
+  #include <signal.h>
+  #include <sys/syscall.h>
+  
++ #ifdef arm
++ #undef __NR_rt_sigaction
++ #endif
++ 
+  /* Primitives for controlling thread execution */
+  
+  static inline void restart(pthread_descr th)

@@ -1,0 +1,410 @@
+#
+# This patch can be found at http://www.uclinux.org/pub/uClinux/m68k-elf-tools/
+#
+diff -urN gcc-2.95.3.ORG/gcc/config/arm/arm.c gcc-2.95.3/gcc/config/arm/arm.c
+--- gcc-2.95.3.ORG/gcc/config/arm/arm.c	Thu Jan 25 22:03:24 2001
++++ gcc-2.95.3/gcc/config/arm/arm.c	Wed Oct 17 16:14:34 2001
+@@ -139,6 +139,7 @@
+ int current_function_anonymous_args;
+ 
+ /* The register number to be used for the PIC offset register.  */
++const char * arm_pic_register_string = NULL;
+ int arm_pic_register = 9;
+ 
+ /* Location counter of .text segment.  */
+@@ -538,7 +539,19 @@
+       else
+ 	warning ("Structure size boundary can only be set to 8 or 32");
+     }
+-  
++ 
++  if (arm_pic_register_string != NULL)
++    {
++      if (! flag_pic)
++       warning ("-mpic-register= is useless without -fpic");
++
++      arm_pic_register = decode_reg_name (arm_pic_register_string);
++
++      /* Prevent the user from choosing an obviously stupid PIC register.  */
++      if (call_used_regs [arm_pic_register])
++       error ("bad value %d for PIC register", arm_pic_register);
++    } 
++
+   /* If optimizing for space, don't synthesize constants.
+      For processors with load scheduling, it never costs more than 2 cycles
+      to load a constant, and the load scheduler may well reduce that to 1.  */
+@@ -1529,7 +1542,20 @@
+       return gen_rtx_PLUS (Pmode, base, offset);
+     }
+   else if (GET_CODE (orig) == LABEL_REF)
+-    current_function_uses_pic_offset_table = 1;
++    {
++      current_function_uses_pic_offset_table = 1;
++
++      if (NEED_GOT_RELOC)
++       {
++         rtx pic_ref, address = gen_reg_rtx (Pmode);
++
++         emit_insn (gen_pic_load_addr (address, orig));
++         pic_ref = gen_rtx_PLUS (Pmode, pic_offset_table_rtx,
++                                 address);
++         emit_move_insn (address, pic_ref);
++         return address;
++       }
++    }
+ 
+   return orig;
+ }
+@@ -1552,7 +1578,7 @@
+   rtx l1, pic_tmp, pic_tmp2, seq;
+   rtx global_offset_table;
+ 
+-  if (current_function_uses_pic_offset_table == 0)
++  if (current_function_uses_pic_offset_table == 0 || TARGET_SINGLE_PIC_BASE)
+     return;
+ 
+   if (! flag_pic)
+@@ -5304,7 +5330,7 @@
+ 
+       /* Otherwise, trap an attempted return by aborting. */
+       ops[0] = operand;
+-      ops[1] = gen_rtx_SYMBOL_REF (Pmode, NEED_PLT_GOT ? "abort(PLT)" 
++      ops[1] = gen_rtx_SYMBOL_REF (Pmode, NEED_PLT_RELOC ? "abort(PLT)"
+ 				   : "abort");
+       assemble_external_libcall (ops[1]);
+       output_asm_insn (reverse ? "bl%D0\t%a1" : "bl%d0\t%a1", ops);
+@@ -5318,7 +5344,8 @@
+     if (regs_ever_live[reg] && ! call_used_regs[reg])
+       live_regs++;
+ 
+-  if (flag_pic && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
++  if (flag_pic && ! TARGET_SINGLE_PIC_BASE
++      && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
+     live_regs++;
+ 
+   if (live_regs || (regs_ever_live[14] && ! lr_save_eliminated))
+@@ -5342,7 +5369,8 @@
+       for (reg = 0; reg <= 10; reg++)
+         if (regs_ever_live[reg] 
+ 	    && (! call_used_regs[reg]
+-		|| (flag_pic && reg == PIC_OFFSET_TABLE_REGNUM)))
++               || (flag_pic && ! TARGET_SINGLE_PIC_BASE
++                   && reg == PIC_OFFSET_TABLE_REGNUM)))
+           {
+ 	    strcat (instr, "%|");
+             strcat (instr, reg_names[reg]);
+@@ -5502,7 +5530,8 @@
+     if (regs_ever_live[reg] && ! call_used_regs[reg])
+       live_regs_mask |= (1 << reg);
+ 
+-  if (flag_pic && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
++  if (flag_pic && ! TARGET_SINGLE_PIC_BASE
++      && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
+     live_regs_mask |= (1 << PIC_OFFSET_TABLE_REGNUM);
+ 
+   if (frame_pointer_needed)
+@@ -5568,7 +5597,7 @@
+   if (TARGET_ABORT_NORETURN && volatile_func)
+     {
+       rtx op;
+-      op = gen_rtx_SYMBOL_REF (Pmode, NEED_PLT_GOT ? "abort(PLT)" : "abort");
++      op = gen_rtx_SYMBOL_REF (Pmode, NEED_PLT_RELOC ? "abort(PLT)" : "abort");
+       assemble_external_libcall (op);
+       output_asm_insn ("bl\t%a0", &op);
+       goto epilogue_done;
+@@ -5581,7 +5610,10 @@
+ 	floats_offset += 4;
+       }
+ 
+-  if (flag_pic && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
++  /* If we aren't loading the PIC register, don't stack it even though it may
++     be live.  */
++  if (flag_pic && ! TARGET_SINGLE_PIC_BASE
++      && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
+     {
+       live_regs_mask |= (1 << PIC_OFFSET_TABLE_REGNUM);
+       floats_offset += 4;
+@@ -5852,7 +5884,8 @@
+ 	if (regs_ever_live[reg] && ! call_used_regs[reg])
+ 	  live_regs_mask |= 1 << reg;
+ 
+-      if (flag_pic && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
++    if (flag_pic && ! TARGET_SINGLE_PIC_BASE
++     && regs_ever_live[PIC_OFFSET_TABLE_REGNUM])
+ 	live_regs_mask |= 1 << PIC_OFFSET_TABLE_REGNUM;
+ 
+       if (regs_ever_live[14])
+diff -urN gcc-2.95.3.ORG/gcc/config/arm/arm.h gcc-2.95.3/gcc/config/arm/arm.h
+--- gcc-2.95.3.ORG/gcc/config/arm/arm.h	Thu Jan 25 22:03:26 2001
++++ gcc-2.95.3/gcc/config/arm/arm.h	Wed Oct 17 11:19:36 2001
+@@ -310,6 +310,9 @@
+ function tries to return. */
+ #define ARM_FLAG_ABORT_NORETURN (0x8000)
+ 
++/* Nonzero if function prologues should not load the PIC register. */
++#define ARM_FLAG_SINGLE_PIC_BASE       (1 << 16)
++
+ #define TARGET_APCS			(target_flags & ARM_FLAG_APCS_FRAME)
+ #define TARGET_POKE_FUNCTION_NAME	(target_flags & ARM_FLAG_POKE)
+ #define TARGET_FPE			(target_flags & ARM_FLAG_FPE)
+@@ -332,6 +335,7 @@
+ #define TARGET_LITTLE_WORDS		(target_flags & ARM_FLAG_LITTLE_WORDS)
+ #define TARGET_NO_SCHED_PRO		(target_flags & ARM_FLAG_NO_SCHED_PRO)
+ #define TARGET_ABORT_NORETURN           (target_flags & ARM_FLAG_ABORT_NORETURN)
++#define TARGET_SINGLE_PIC_BASE          (target_flags & ARM_FLAG_SINGLE_PIC_BASE)
+ 
+ /* SUBTARGET_SWITCHES is used to add flags on a per-config basis.
+    Bit 31 is reserved.  See riscix.h.  */
+@@ -365,7 +369,7 @@
+      "Load shorts a byte at a time" },			\
+   {"no-short-load-bytes",      -ARM_FLAG_SHORT_BYTE, "" }, \
+   {"short-load-words",	       -ARM_FLAG_SHORT_BYTE, 	\
+-     "Load words a byte at a time" },			\
++     "Load shorts a word at a time" },			\
+   {"no-short-load-words",	ARM_FLAG_SHORT_BYTE, "" }, \
+   {"soft-float",		ARM_FLAG_SOFT_FLOAT, 	\
+      "Use library calls to perform FP operations" },	\
+@@ -386,6 +390,9 @@
+   {"sched-prolog",             -ARM_FLAG_NO_SCHED_PRO, 	\
+      "Do not move instructions into a function's prologue" }, \
+   {"no-sched-prolog",           ARM_FLAG_NO_SCHED_PRO, "" }, \
++  {"single-pic-base",          ARM_FLAG_SINGLE_PIC_BASE,       \
++     "Do not load the PIC register in function prologues" },   \
++  {"no-single-pic-base",       -ARM_FLAG_SINGLE_PIC_BASE, "" },\
+   SUBTARGET_SWITCHES					\
+   {"",				TARGET_DEFAULT }	\
+ }
+@@ -401,7 +408,9 @@
+   {"fp=",   & target_fp_name,					\
+      "Specify the version of the floating point emulator" },	\
+   { "structure-size-boundary=", & structure_size_string, 	\
+-      "Specify the minumum bit alignment of structures" } 	\
++     "Specify the minumum bit alignment of structures" },	\
++  { "pic-register=", & arm_pic_register_string,			\
++     "Specify the register to be used for PIC addressing" }	\
+ }
+ 
+ struct arm_cpu_select
+@@ -480,9 +489,12 @@
+ 
+ /* Nonzero if PIC code requires explicit qualifiers to generate
+    PLT and GOT relocs rather than the assembler doing so implicitly.
+-   Subtargets can override this if required.  */
+-#ifndef NEED_PLT_GOT
+-#define NEED_PLT_GOT	0
++   Subtargets can override these if required.  */
++#ifndef NEED_GOT_RELOC
++#define NEED_GOT_RELOC 0
++#endif
++#ifndef NEED_PLT_RELOC
++#define NEED_PLT_RELOC 0
+ #endif
+ 
+ /* Nonzero if we need to refer to the GOT with a PC-relative
+@@ -1379,8 +1391,11 @@
+ 
+    On the ARM, allow any integer (invalid ones are removed later by insn
+    patterns), nice doubles and symbol_refs which refer to the function's
+-   constant pool XXX.  */
+-#define LEGITIMATE_CONSTANT_P(X)	(! label_mentioned_p (X))
++   constant pool XXX.
++
++   When generating PIC code, allow anything.  */
++#define LEGITIMATE_CONSTANT_P(X)       (flag_pic || ! label_mentioned_p (X))
++
+ 
+ /* Symbols in the text segment can be accessed without indirecting via the
+    constant pool; it may take an extra binary operation, but this is still
+@@ -1808,6 +1823,9 @@
+    using sb (r9) all the time.  */
+ extern int arm_pic_register;
+ 
++/* Used when parsing command line option -mpic-register=.  */
++extern const char * arm_pic_register_string;
++
+ /* The register number of the register used to address a table of static
+    data addresses in memory.  */
+ #define PIC_OFFSET_TABLE_REGNUM arm_pic_register
+@@ -1817,9 +1835,10 @@
+ /* We can't directly access anything that contains a symbol,
+    nor can we indirect via the constant pool.  */
+ #define LEGITIMATE_PIC_OPERAND_P(X)				\
+-	(! symbol_mentioned_p (X)				\
++        (! symbol_mentioned_p (X) && ! label_mentioned_p (X)    \
+ 	 && (! CONSTANT_POOL_ADDRESS_P (X)			\
+-	     || ! symbol_mentioned_p (get_pool_constant (X))))
++             || (! symbol_mentioned_p (get_pool_constant (X)))  \
++                && (! label_mentioned_p (get_pool_constant (X)))))
+  
+ /* We need to know when we are making a constant pool; this determines
+    whether data needs to be in the GOT or can be referenced via a GOT
+@@ -2060,7 +2079,7 @@
+ 									\
+     /* Mark symbols as position independent.  We only do this in the	\
+       .text segment, not in the .data segment. */			\
+-    if (NEED_PLT_GOT && flag_pic && making_const_table &&		\
++    if (NEED_GOT_RELOC && flag_pic && making_const_table &&		\
+     	(GET_CODE(X) == SYMBOL_REF || GET_CODE(X) == LABEL_REF))	\
+      {									\
+         if (GET_CODE(X) == SYMBOL_REF && CONSTANT_POOL_ADDRESS_P(X))	\
+@@ -2098,7 +2117,7 @@
+     }									\
+   fputs ("\tb\t", FILE);						\
+   assemble_name (FILE, XSTR (XEXP (DECL_RTL (FUNCTION), 0), 0));	\
+-  if (NEED_PLT_GOT)							\
++  if (NEED_PLT_RELOC)							\
+     fputs ("(PLT)", FILE);						\
+   fputc ('\n', FILE);							\
+ } while (0)
+diff -urN gcc-2.95.3.ORG/gcc/config/arm/arm.md gcc-2.95.3/gcc/config/arm/arm.md
+--- gcc-2.95.3.ORG/gcc/config/arm/arm.md	Thu Jan 25 22:03:27 2001
++++ gcc-2.95.3/gcc/config/arm/arm.md	Wed Oct 17 10:58:34 2001
+@@ -4248,7 +4248,7 @@
+   "GET_CODE (operands[0]) == SYMBOL_REF"
+   "*
+   {
+-    return NEED_PLT_GOT ? \"bl%?\\t%a0(PLT)\" : \"bl%?\\t%a0\";
++    return NEED_PLT_RELOC ? \"bl%?\\t%a0(PLT)\" : \"bl%?\\t%a0\";
+   }"
+ [(set_attr "type" "call")])
+ 
+@@ -4260,7 +4260,7 @@
+   "GET_CODE(operands[1]) == SYMBOL_REF"
+   "*
+   {
+-    return NEED_PLT_GOT ? \"bl%?\\t%a1(PLT)\" : \"bl%?\\t%a1\";
++    return NEED_PLT_RELOC ? \"bl%?\\t%a1(PLT)\" : \"bl%?\\t%a1\";
+   }"
+ [(set_attr "type" "call")])
+ 
+@@ -5995,7 +5995,7 @@
+   }
+ 
+   output_return_instruction (NULL, FALSE, FALSE);
+-  return NEED_PLT_GOT ? \"b%?\\t%a0(PLT)\" : \"b%?\\t%a0\";
++  return NEED_PLT_RELOC ? \"b%?\\t%a0(PLT)\" : \"b%?\\t%a0\";
+ }"
+ [(set_attr "type" "call")
+  (set_attr "length" "8")])
+@@ -6023,7 +6023,7 @@
+   }
+ 
+   output_return_instruction (NULL, FALSE, FALSE);
+-  return NEED_PLT_GOT ? \"b%?\\t%a1(PLT)\" : \"b%?\\t%a1\";
++  return NEED_PLT_RELOC ? \"b%?\\t%a1(PLT)\" : \"b%?\\t%a1\";
+ }"
+ [(set_attr "type" "call")
+  (set_attr "length" "8")])
+diff -urN gcc-2.95.3.ORG/gcc/config/arm/elf.h gcc-2.95.3/gcc/config/arm/elf.h
+--- gcc-2.95.3.ORG/gcc/config/arm/elf.h	Mon May 31 16:21:53 1999
++++ gcc-2.95.3/gcc/config/arm/elf.h	Wed Oct 17 10:58:34 2001
+@@ -336,7 +336,8 @@
+        fputc ('\n', FILE); } while (0)
+ 
+ /* For PIC code we need to explicitly specify (PLT) and (GOT) relocs.  */
+-#define NEED_PLT_GOT	flag_pic
++#define NEED_PLT_RELOC flag_pic
++#define NEED_GOT_RELOC flag_pic
+ 
+ /* The ELF assembler handles GOT addressing differently to NetBSD.  */
+ #define GOT_PCREL	0
+diff -urN gcc-2.95.3.ORG/gcc/invoke.texi gcc-2.95.3/gcc/invoke.texi
+--- gcc-2.95.3.ORG/gcc/invoke.texi	Thu Jan 25 22:03:17 2001
++++ gcc-2.95.3/gcc/invoke.texi	Wed Oct 17 10:58:35 2001
+@@ -263,7 +263,8 @@
+ -mstructure-size-boundary=
+ -mbsd -mxopen -mno-symrename
+ -mabort-on-noreturn
+--mno-sched-prolog
++-msingle-pic-base -mno-single-pic-base
++-mpic-register=
+ 
+ @emph{Thumb Options}
+ -mtpcs-frame -mno-tpcs-frame
+@@ -3781,7 +3782,7 @@
+ @kindex -mapcs-float
+ @kindex -mno-apcs-float
+ Pass floating point arguments using the float point registers.  This is
+-one of the variants of the APCS.  This option is reccommended if the
++one of the variants of the APCS.  This option is recommended if the
+ target hardware has a floating point unit or if a lot of floating point
+ arithmetic is going to be performed by the code.  The default is
+ @samp{-mno-apcs-float}, since integer only code is slightly increased in
+@@ -3808,8 +3809,8 @@
+ @kindex -msched-prolog
+ Prevent the reordering of instructions in the function prolog, or the
+ merging of those instruction with the instructions in the function's
+-body.  This means that all functions will start with a recognisable set
+-of instructions (or in fact one of a chioce from a small set of
++body.  This means that all functions will start with a recognizable set
++of instructions (or in fact one of a choice from a small set of
+ different function prologues), and this information can be used to
+ locate the start if functions inside an executable piece of code.  The
+ default is @samp{-msched-prolog}.
+@@ -3863,11 +3864,11 @@
+ 
+ @item -mshort-load-words
+ @kindex -mshort-load-words
+-This is a synonym for the @samp{-mno-short-load-bytes}.
++This is a synonym for @samp{-mno-short-load-bytes}.
+ 
+ @item -mno-short-load-words
+ @kindex -mno-short-load-words
+-This is a synonym for the @samp{-mshort-load-bytes}.
++This is a synonym for @samp{-mshort-load-bytes}.
+ 
+ @item -mbsd
+ @kindex -mbsd
+@@ -3894,7 +3895,7 @@
+ @kindex -mtune=
+ This specifies the name of the target ARM processor.  GCC uses this name
+ to determine what kind of instructions it can use when generating
+-assembly code.  Permissable names are: arm2, arm250, arm3, arm6, arm60,
++assembly code.  Permissible names are: arm2, arm250, arm3, arm6, arm60,
+ arm600, arm610, arm620, arm7, arm7m, arm7d, arm7dm, arm7di, arm7dmi,
+ arm70, arm700, arm700i, arm710, arm710c, arm7100, arm7500, arm7500fe,
+ arm7tdmi, arm8, strongarm, strongarm110, strongarm1100, arm8, arm810,
+@@ -3906,7 +3907,7 @@
+ This specifies the name of the target ARM architecture.  GCC uses this
+ name to determine what kind of instructions it can use when generating
+ assembly code.  This option can be used in conjunction with or instead
+-of the @samp{-mcpu=} option.  Permissable names are: armv2, armv2a,
++of the @samp{-mcpu=} option.  Permissible names are: armv2, armv2a,
+ armv3, armv3m, armv4, armv4t
+ 
+ @item -mfpe=<number>
+@@ -3914,13 +3915,13 @@
+ @kindex -mfpe=
+ @kindex -mfp=
+ This specifes the version of the floating point emulation available on
+-the target.  Permissable values are 2 and 3.  @samp{-mfp=} is a synonym
++the target.  Permissible values are 2 and 3.  @samp{-mfp=} is a synonym
+ for @samp{-mfpe=} to support older versions of GCC.
+ 
+ @item -mstructure-size-boundary=<n>
+ @kindex -mstructure-size-boundary
+ The size of all structures and unions will be rounded up to a multiple
+-of the number of bits set by this option.  Permissable values are 8 and
++of the number of bits set by this option.  Permissible values are 8 and
+ 32.  The default value varies for different toolchains.  For the COFF
+ targeted toolchain the default value is 8.  Specifying the larger number
+ can produced faster, more efficient code, but can also increase the size
+@@ -3935,6 +3936,18 @@
+ @kindex -mnoabort-on-noreturn
+ Generate a call to the function abort at the end of a noreturn function.
+ It will be executed if the function tries to return.
++
++@item -msingle-pic-base
++@kindex -msingle-pic-base
++Treat the register used for PIC addressing as read-only, rather than
++loading it in the prologue for each function.  The run-time system is
++responsible for initialising this register with an appropriate value
++before execution begins.
++
++@item -mpic-register=<reg>
++@kindex -mpic-register=
++Specify the register used for PIC addressing.  The default is R9 if
++stack-checking is enabled, otherwise R10.
+ 
+ @end table
+ 
